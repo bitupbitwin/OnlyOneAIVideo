@@ -116,6 +116,9 @@ export interface RuntimeScene {
   clip?: { start: number; end: number };
   framePath?: string;
   audioPath?: string;
+  /** TTS 音频实测时长（compose 前 ffprobe 回填） */
+  ttsDurSec?: number;
+  /** 分段总时长 = ttsDurSec + gap，母版时间轴主时钟 */
   durationSec?: number;
   segmentPath?: string;
 }

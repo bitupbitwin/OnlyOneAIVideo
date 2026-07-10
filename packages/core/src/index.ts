@@ -1,3 +1,4 @@
+export * from "./compose.js";
 export * from "./db.js";
 export * from "./engine.js";
 export * from "./registry.js";

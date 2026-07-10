@@ -8,6 +8,7 @@ export function TopicWorkbench() {
   const [providers, setProviders] = useState<any[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [composeProgress, setComposeProgress] = useState<{ pct: number; message?: string } | null>(null);
 
   const load = () => {
     api.get<any>(`/api/topics/${id}`).then(setTopic).catch((e) => setError(e.message));
@@ -17,6 +18,10 @@ export function TopicWorkbench() {
     load();
     return connectWs((event) => {
       if (String(event.topicId) !== String(id)) return;
+      if (event.type === "compose-progress") {
+        setComposeProgress(event.data.pct >= 100 ? null : { pct: event.data.pct, message: event.data.message });
+        return; // 进度事件高频，不触发整页刷新
+      }
       load();
     });
   }, [id]);
@@ -70,6 +75,22 @@ export function TopicWorkbench() {
                 {s.provider_id ? ` · ${s.provider_id}` : ""}
               </p>
               {s.error && <div className="error-text">{s.error}</div>}
+              {s.step_id === "compose" && s.status === "running" && composeProgress && (
+                <div className="muted">
+                  合成中 {composeProgress.pct}%{composeProgress.message ? ` · ${composeProgress.message}` : ""}
+                  <div style={{ height: 6, background: "#333", borderRadius: 3, marginTop: 4 }}>
+                    <div
+                      style={{
+                        height: 6,
+                        width: `${composeProgress.pct}%`,
+                        background: "#4f8cff",
+                        borderRadius: 3,
+                        transition: "width .3s",
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
               <div className="row">
                 <select
                   value={s.provider_id ?? ""}
@@ -108,6 +129,24 @@ export function TopicWorkbench() {
                         {a.label ?? a.role ?? a.kind}
                       </label>
                       {a.content && <pre>{a.content}</pre>}
+                      {a.kind === "video" && a.file_path && (
+                        <video
+                          controls
+                          preload="metadata"
+                          src={`/api/artifacts/${a.id}/file`}
+                          style={{ maxWidth: 240, maxHeight: 400, display: "block", borderRadius: 6, margin: "6px 0" }}
+                        />
+                      )}
+                      {a.kind === "audio" && a.file_path && (
+                        <audio controls preload="none" src={`/api/artifacts/${a.id}/file`} style={{ display: "block", margin: "6px 0", width: 260 }} />
+                      )}
+                      {a.kind === "image" && a.file_path && (
+                        <img
+                          src={`/api/artifacts/${a.id}/file`}
+                          alt={a.label ?? ""}
+                          style={{ maxWidth: 140, maxHeight: 240, display: "block", borderRadius: 6, margin: "6px 0" }}
+                        />
+                      )}
                       {a.file_path && <a href={`/api/artifacts/${a.id}/file`}>打开文件</a>}
                     </div>
                   ))}

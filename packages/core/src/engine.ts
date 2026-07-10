@@ -8,8 +8,11 @@ import type { Repo, StepRow } from "./db.js";
 import type { ProviderRegistry } from "./registry.js";
 import type { TemplateStore } from "./templates.js";
 import { initialStepStatus, MAINLINE, MAINLINE_STEP_DEFS, type StepDefMeta } from "./stepDefs.js";
+import { composeMaster, probeDurationSec, type ComposeSceneInput } from "./compose.js";
 
 const STEP_TIMEOUT_MS = 10 * 60 * 1000;
+/** 镜头间呼吸间隔（实现设计 §5.3 Hard-cut 模型） */
+const GAP_SEC = 0.3;
 
 const CONTENT_RULES = [
   "只给真材实料：具体例子、步骤、数据、原理或亲身经验至少要出现一种。",
@@ -244,7 +247,7 @@ export class PipelineEngine extends EventEmitter {
       } else if (step.step_id === "tts") {
         await this.runTts(step);
       } else if (step.step_id === "compose") {
-        throw new Error("M3 ffmpeg 合成尚未实现：当前已打通到 TTS/runtime，下一步实现 master.mp4");
+        await this.runCompose(step);
       } else if (step.step_id === "review") {
         await this.runReview(step);
       } else if (step.step_id === "adapt") {
@@ -422,6 +425,106 @@ export class PipelineEngine extends EventEmitter {
     } finally {
       release();
     }
+    this.writeRuntime(step.topic_id, graph);
+  }
+
+  private async runCompose(step: StepRow) {
+    const graph = this.readRuntime(step.topic_id);
+    if (graph.scenes.length === 0) throw new Error("缺少 runtime/scenes.json，请先生成分镜表");
+    const version = this.repo.nextArtifactVersion(step.id);
+    const outDir = this.stepDir(step, version);
+
+    // 实拍镜头的素材源：选题的第一个视频素材
+    const footage = this.repo.listMaterials(step.topic_id).find((m) => m.kind === "video")?.file_path ?? undefined;
+
+    // 主时钟：TTS 音频 ffprobe 实测时长 + 呼吸间隔（不信任引擎自报时长）
+    const inputs: ComposeSceneInput[] = [];
+    for (const scene of graph.scenes) {
+      if (!scene.audioPath || !fs.existsSync(scene.audioPath)) {
+        throw new Error(`镜头 ${scene.index} 缺少配音文件，请先运行「逐镜配音」`);
+      }
+      const ttsDur = (await probeDurationSec(scene.audioPath)) ?? scene.durationSec;
+      if (!ttsDur || ttsDur <= 0) throw new Error(`镜头 ${scene.index} 配音时长无法探测`);
+      scene.ttsDurSec = Math.round(ttsDur * 100) / 100;
+      scene.durationSec = Math.round((ttsDur + GAP_SEC) * 100) / 100;
+
+      if (scene.source === "footage") {
+        if (!footage || !fs.existsSync(footage)) {
+          throw new Error(`镜头 ${scene.index} 为实拍镜头，但选题没有可用的视频素材`);
+        }
+        inputs.push({
+          index: scene.index,
+          source: "footage",
+          footagePath: footage,
+          clipStart: scene.clip?.start,
+          clipEnd: scene.clip?.end,
+          audioPath: scene.audioPath,
+          subtitle: scene.subtitle || scene.narration,
+          ttsDurSec: scene.ttsDurSec,
+          durationSec: scene.durationSec,
+        });
+      } else {
+        if (!scene.framePath || !fs.existsSync(scene.framePath)) {
+          throw new Error(`镜头 ${scene.index} 缺少画面文件，请先运行「逐镜画面」`);
+        }
+        inputs.push({
+          index: scene.index,
+          source: "generated",
+          framePath: scene.framePath,
+          audioPath: scene.audioPath,
+          subtitle: scene.subtitle || scene.narration,
+          ttsDurSec: scene.ttsDurSec,
+          durationSec: scene.durationSec,
+        });
+      }
+    }
+
+    const bgmEnv = process.env.AMP_BGM_PATH?.trim();
+    const result = await composeMaster({
+      scenes: inputs,
+      outDir,
+      bgmPath: bgmEnv && fs.existsSync(bgmEnv) ? bgmEnv : undefined,
+      onPhase: (phase, pct, message) =>
+        this.emitEvent({
+          type: "compose-progress",
+          topicId: step.topic_id,
+          stepId: step.id,
+          data: { phase, pct: Math.round(pct), message },
+        }),
+    });
+
+    result.segmentPaths.forEach((segPath, i) => {
+      graph.scenes[i].segmentPath = segPath;
+      const artifact = this.repo.createArtifact({
+        stepId: step.id,
+        version,
+        kind: "video",
+        role: "segment",
+        filePath: segPath,
+        label: `分段 ${graph.scenes[i].index}`,
+        meta: { sceneIndex: graph.scenes[i].index, durationSec: graph.scenes[i].durationSec },
+      });
+      this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: artifact });
+    });
+    this.repo.createArtifact({
+      stepId: step.id,
+      version,
+      kind: "file",
+      role: "subtitles",
+      filePath: result.assPath,
+      label: "字幕 subtitles.ass",
+    });
+    const master = this.repo.createArtifact({
+      stepId: step.id,
+      version,
+      kind: "video",
+      role: "master",
+      filePath: result.masterPath,
+      label: `母版成片 master.mp4（${result.totalDurSec}s）`,
+      meta: { durationSec: result.totalDurSec },
+      selected: true,
+    });
+    this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: master });
     this.writeRuntime(step.topic_id, graph);
   }
 

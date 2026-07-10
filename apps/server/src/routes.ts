@@ -183,8 +183,32 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     if (rel.startsWith("..") || path.isAbsolute(rel)) return reply.code(403).send({ error: "禁止访问工作目录之外的文件" });
     const ext = path.extname(resolved).toLowerCase();
     const mime =
-      ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".wav" ? "audio/wav" : "application/octet-stream";
+      ext === ".png" ? "image/png"
+      : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg"
+      : ext === ".wav" ? "audio/wav"
+      : ext === ".mp3" ? "audio/mpeg"
+      : ext === ".mp4" ? "video/mp4"
+      : ext === ".ass" || ext === ".srt" || ext === ".json" || ext === ".txt" ? "text/plain; charset=utf-8"
+      : "application/octet-stream";
     reply.header("Content-Type", mime);
+    reply.header("Accept-Ranges", "bytes");
+
+    // Range 支持：浏览器 <video> 拖动进度条需要 206 分段响应
+    const size = fs.statSync(resolved).size;
+    const range = req.headers.range;
+    const match = typeof range === "string" ? range.match(/^bytes=(\d*)-(\d*)$/) : null;
+    if (match && (match[1] || match[2])) {
+      const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+      const end = match[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+      if (start >= size || start > end) {
+        return reply.code(416).header("Content-Range", `bytes */${size}`).send();
+      }
+      reply.code(206);
+      reply.header("Content-Range", `bytes ${start}-${end}/${size}`);
+      reply.header("Content-Length", end - start + 1);
+      return reply.send(fs.createReadStream(resolved, { start, end }));
+    }
+    reply.header("Content-Length", size);
     return reply.send(fs.createReadStream(resolved));
   });
 
