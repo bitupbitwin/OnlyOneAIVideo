@@ -1,6 +1,9 @@
 packages:
   - apps/*
   - packages/*
+# 非交互环境（预览面板/双击bat）下不要在 run 前做交互式依赖校验/清库确认
+verifyDepsBeforeRun: false
+confirmModulesPurge: false
 onlyBuiltDependencies:
   - sharp
   - esbuild

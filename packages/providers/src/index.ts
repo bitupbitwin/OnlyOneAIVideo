@@ -4,15 +4,14 @@ import { createCliProvider } from "./cli.js";
 import { createApiTextProvider } from "./apiText.js";
 import { createApiImageProvider } from "./apiImage.js";
 import { createApiVideoProvider } from "./apiVideo.js";
-import { createWebProvider } from "./web.js";
+import { createTtsProvider } from "./tts.js";
 
 export const providerFactories: Record<ProviderKind, ProviderFactory> = {
   cli: createCliProvider,
   "api-text": createApiTextProvider,
   "api-image": createApiImageProvider,
   "api-video": createApiVideoProvider,
-  web: createWebProvider,
+  tts: createTtsProvider,
 };
 
-export { createCliProvider, createApiTextProvider, createApiImageProvider, createApiVideoProvider, createWebProvider };
-export { openLoginWindow, resolveWebConfig, hasLoginProfile } from "./webSession.js";
+export { createCliProvider, createApiTextProvider, createApiImageProvider, createApiVideoProvider, createTtsProvider };

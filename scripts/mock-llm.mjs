@@ -53,17 +53,41 @@ if (prompt.includes("JSON 数组") && prompt.includes("候选标题")) {
       2
     )
   );
-} else if (prompt.includes("分镜表")) {
+} else if (prompt.includes("V2 分镜表") || prompt.includes("分镜表")) {
   console.log(
     JSON.stringify(
       {
         scenes: [
-          { shot: 1, visual: "近景特写，主角面向镜头", line: `你还在为${topic}发愁吗？`, subtitle: `你还在为${topic}发愁吗？`, durationSec: 3 },
-          { shot: 2, visual: "屏幕录制/产品展示", line: "今天用 3 步讲清楚核心方法。", subtitle: "3 步讲清楚", durationSec: 5 },
-          { shot: 3, visual: "要点字卡逐条弹出", line: "第一步，找准切入点；第二步，搭好结构；第三步，持续迭代。", subtitle: "三个步骤", durationSec: 8 },
-          { shot: 4, visual: "回到出镜口播", line: "关注我，下期讲实操案例。", subtitle: "关注不迷路", durationSec: 3 },
+          {
+            index: 1,
+            narration: `你还在为${topic}发愁吗？`,
+            subtitle: `你还在为${topic}发愁吗？`,
+            source: "generated",
+            visual: "1080x1920 竖版，近景特写，主角面向镜头，背景简洁，有短视频开场冲击力"
+          },
+          {
+            index: 2,
+            narration: "今天用 3 步讲清楚核心方法。",
+            subtitle: "3 步讲清楚",
+            source: "generated",
+            visual: "1080x1920 竖版，手机屏幕与要点卡片组合，信息清楚，现代内容创作工作台氛围"
+          },
+          {
+            index: 3,
+            narration: "第一步，找准切入点；第二步，搭好结构；第三步，持续迭代。",
+            subtitle: "找切入点 / 搭结构 / 持续迭代",
+            source: "generated",
+            visual: "1080x1920 竖版，三张要点字卡依次排列，留白充足，视觉层次清晰"
+          },
+          {
+            index: 4,
+            narration: "把这三步跑顺，你就能稳定做出第一条可发布的视频。",
+            subtitle: "稳定做出第一条视频",
+            source: "generated",
+            visual: "1080x1920 竖版，完成的视频预览在手机中播放，旁边是勾选完成的流程清单"
+          },
         ],
-        bgmHint: "轻快节奏，副歌不抢人声",
+        bgmMood: "轻快节奏，副歌不抢人声",
       },
       null,
       2

@@ -5,7 +5,8 @@ const KIND_LABEL: Record<string, string> = {
   cli: "CLI 命令行",
   "api-text": "文本 API",
   "api-image": "出图 API",
-  web: "网页端（M4）",
+  "api-video": "视频 API",
+  tts: "TTS 配音",
 };
 
 export function Providers() {
@@ -83,21 +84,6 @@ export function Providers() {
                   <button className="ghost small" onClick={() => checkHealth(p.id)}>
                     检测
                   </button>
-                  {p.kind === "web" && (
-                    <button
-                      className="ghost small"
-                      style={{ marginLeft: 6 }}
-                      onClick={async () => {
-                        setHealth((prev) => ({ ...prev, [p.id]: { detail: "正在打开浏览器…" } }));
-                        const result = await api
-                          .post<any>(`/api/providers/${p.id}/web-login`)
-                          .catch((e) => ({ ok: false, detail: e.message }));
-                        setHealth((prev) => ({ ...prev, [p.id]: result }));
-                      }}
-                    >
-                      打开登录窗口
-                    </button>
-                  )}
                   {health[p.id] && (
                     <span style={{ marginLeft: 8, color: health[p.id].ok ? "var(--green)" : "var(--red)" }}>
                       {health[p.id].detail}
