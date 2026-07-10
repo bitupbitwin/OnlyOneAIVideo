@@ -12,6 +12,8 @@
     "@amp/review": "workspace:*",
     "@amp/shared": "workspace:*",
     "docx": "^9.0.0",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
     "sharp": "^0.33.5"
   },
   "devDependencies": {

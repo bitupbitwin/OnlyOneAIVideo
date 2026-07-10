@@ -4,14 +4,18 @@ packages:
 # 非交互环境（预览面板/双击bat）下不要在 run 前做交互式依赖校验/清库确认
 verifyDepsBeforeRun: false
 confirmModulesPurge: false
+# node_modules 由项目内 store 链接而成，钉死避免 pnpm 换默认 store 后要求整库重装
+storeDir: .pnpm-store
 onlyBuiltDependencies:
   - sharp
   - esbuild
   - electron
+  - ffmpeg-static
 # 供应链安全：只使用发布满 3 天的包版本
 minimumReleaseAge: 4320
 allowBuilds:
   better-sqlite3: set this to true or false
   electron: true
   esbuild: false
+  ffmpeg-static: true
   sharp: true
