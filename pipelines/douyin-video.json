@@ -1,0 +1,86 @@
+{
+  "id": "douyin-video",
+  "platform": "douyin",
+  "mode": "video",
+  "name": "抖音 · 视频",
+  "options": [
+    {
+      "id": "aspect",
+      "default": "9:16",
+      "aspects": [
+        "9:16",
+        "3:4",
+        "1:1",
+        "16:9"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "55",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文/脚本字数",
+      "type": "number",
+      "default": "300",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    }
+  ],
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "douyin/video/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "口播稿生成",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "douyin/video/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "promptTemplate": "douyin/video/cover.md",
+      "aspects": [
+        "9:16",
+        "3:4",
+        "1:1",
+        "16:9"
+      ]
+    },
+    {
+      "id": "video",
+      "name": "分镜与剪映草稿",
+      "type": "video",
+      "needs": [
+        "content"
+      ],
+      "promptTemplate": "douyin/video/storyboard.md",
+      "defaultProvider": "cli-gemini",
+      "post": "jianying-draft"
+    },
+    "review"
+  ],
+  "notes": [
+    "视频前 3 秒必须出现核心钩子，否则完播率会显著下降",
+    "标题不超过 55 字，话题标签 3-5 个，避免堆砌",
+    "封面使用 9:16 竖版（1080x1920），文字占比不超过 1/3",
+    "不要在视频或文案中出现外链、二维码、微信号",
+    "发布时间建议：工作日 12:00-13:00 / 18:00-21:00",
+    "发布前确认无极限词（最/第一/国家级等）"
+  ]
+}

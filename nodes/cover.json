@@ -1,0 +1,7 @@
+{
+  "id": "cover",
+  "name": "封面生成",
+  "type": "cover",
+  "needs": ["title"],
+  "defaultProvider": "api-jimeng"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "image-to-video",
+  "name": "图生视频（图片转动态片段）",
+  "type": "image-to-video",
+  "needs": ["batch-images"],
+  "promptTemplate": "common/image-to-video.md",
+  "defaultProvider": "video-mock"
+}

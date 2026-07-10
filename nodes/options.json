@@ -1,0 +1,11 @@
+{
+  "imageGen": {
+    "id": "imageGen",
+    "label": "内容配图",
+    "default": "prompts",
+    "choices": [
+      { "value": "prompts", "label": "仅出图提示词" },
+      { "value": "real", "label": "真实出图（按内容批量生成多张图）" }
+    ]
+  }
+}

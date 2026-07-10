@@ -1,0 +1,166 @@
+{
+  "id": "mv-song",
+  "platform": "mv",
+  "mode": "song",
+  "name": "MV · 歌词可视化",
+  "options": [
+    {
+      "id": "visualMode",
+      "label": "生成形式",
+      "default": "images",
+      "choices": [
+        {
+          "value": "images",
+          "label": "纯图片（图片轮播）"
+        },
+        {
+          "value": "video",
+          "label": "纯视频（分镜视频）"
+        }
+      ]
+    },
+    {
+      "id": "aspect",
+      "label": "画面比例",
+      "default": "9:16",
+      "choices": [
+        { "value": "9:16", "label": "9:16 竖版" },
+        { "value": "16:9", "label": "16:9 横版" }
+      ]
+    },
+    {
+      "id": "imageCount",
+      "label": "画面数量",
+      "type": "number",
+      "default": "12",
+      "min": 4,
+      "max": 30,
+      "hint": "全曲拆成多少张画面（纯图片时=图片数，也=图生视频段数）"
+    },
+    {
+      "id": "imageGen",
+      "label": "图片出图",
+      "default": "prompts",
+      "choices": [
+        {
+          "value": "prompts",
+          "label": "仅出提示词"
+        },
+        {
+          "value": "real",
+          "label": "真实出图（调用出图API，按提示词批量生成）"
+        }
+      ]
+    },
+    {
+      "id": "videoGen",
+      "label": "图生视频",
+      "default": "none",
+      "choices": [
+        { "value": "none", "label": "不生成视频" },
+        { "value": "real", "label": "把每张图转成动态片段（需纯图片+真实出图+视频API）" }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "id": "lyrics",
+      "name": "歌词与歌名生成",
+      "type": "lyrics",
+      "needs": [],
+      "promptTemplate": "mv/lyrics.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "image-prompts",
+      "name": "图片提示词（全曲分段）",
+      "promptTemplate": "mv/image-prompts.md",
+      "when": {
+        "visualMode": "images"
+      },
+      "needs": [
+        "lyrics"
+      ]
+    },
+    {
+      "use": "batch-images",
+      "name": "批量出图（按提示词逐张生成）",
+      "when": {
+        "visualMode": "images",
+        "imageGen": "real"
+      },
+      "coverSizesByAspect": {
+        "9:16": [{ "w": 1080, "h": 1920, "label": "竖屏 9:16" }],
+        "16:9": [{ "w": 1920, "h": 1080, "label": "横屏 16:9" }]
+      }
+    },
+    {
+      "use": "image-to-video",
+      "name": "图生视频（把每张图转成动态片段）",
+      "when": {
+        "visualMode": "images",
+        "imageGen": "real",
+        "videoGen": "real"
+      },
+      "coverSizesByAspect": {
+        "9:16": [{ "w": 1080, "h": 1920, "label": "竖屏 9:16" }],
+        "16:9": [{ "w": 1920, "h": 1080, "label": "横屏 16:9" }]
+      }
+    },
+    {
+      "id": "video-prompts",
+      "name": "视频提示词（全曲分镜）",
+      "type": "video-prompts",
+      "needs": [
+        "lyrics"
+      ],
+      "promptTemplate": "mv/video-prompts.md",
+      "defaultProvider": "cli-claude",
+      "when": {
+        "visualMode": "video"
+      }
+    },
+    {
+      "id": "subtitle",
+      "name": "SRT 字幕生成",
+      "type": "subtitle",
+      "needs": [
+        "lyrics"
+      ],
+      "promptTemplate": "mv/subtitle.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "name": "封面图生成",
+      "promptTemplate": "mv/cover.md",
+      "needs": [
+        "lyrics"
+      ],
+      "coverSizesByAspect": {
+        "9:16": [{ "w": 1080, "h": 1920, "label": "竖屏封面 9:16" }],
+        "16:9": [{ "w": 1920, "h": 1080, "label": "横屏封面 16:9" }]
+      }
+    },
+    {
+      "id": "docx",
+      "name": "提示词文档打包（docx）",
+      "type": "docx",
+      "needs": [
+        "image-prompts",
+        "video-prompts",
+        "cover"
+      ]
+    }
+  ],
+  "notes": [
+    "创建流程时先选「生成形式」（纯图片/纯视频）与「画面比例」（9:16/16:9）",
+    "纯图片：生成全曲分段图片提示词；纯视频：生成全曲分镜视频提示词（二选一，不混合）",
+    "提示词按所选比例自动加入构图保护规范（竖版[VERTICAL 9:16] / 横版[HORIZONTAL 16:9]）",
+    "封面尺寸随所选比例自动切换（9:16→1080x1920 / 16:9→1920x1080）",
+    "封面默认用即梦（中文标题渲染好）；标题文字取歌名《》",
+    "SRT 字幕时间轴按典型节奏估算，导入剪映/Pr 后需对齐到实际歌曲音频",
+    "生成完整 MV：歌曲音频用 Suno 等生成，把图片/视频+字幕+音频在剪映中合成导出",
+    "导出产物包内含 docx 提示词文档与 srt 字幕文档及封面图"
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "id": "xhs-note",
+  "platform": "xiaohongshu",
+  "mode": "note",
+  "name": "小红书 · 图文笔记",
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "xiaohongshu/note/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "笔记正文生成",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "xiaohongshu/note/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "promptTemplate": "xiaohongshu/note/cover.md",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1"
+      ]
+    },
+    "image-prompts",
+    {
+      "use": "batch-images",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1"
+      ]
+    },
+    {
+      "use": "image-to-video",
+      "when": {
+        "imageGen": "real",
+        "videoGen": "real"
+      },
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1"
+      ]
+    },
+    "review"
+  ],
+  "notes": [
+    "标题不超过 20 字，适当使用 emoji，避免标题党被限流",
+    "正文不超过 1000 字，多分段、多换行，口语化表达",
+    "结尾带 3-6 个精准话题标签（#话题）",
+    "封面 3:4 竖版，文字不超过 2 行大字",
+    "严禁出现微信号、二维码、站外引流话术",
+    "首发后 1 小时内回复评论有助于流量"
+  ],
+  "options": [
+    {
+      "id": "aspect",
+      "default": "3:4",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "20",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文字数",
+      "type": "number",
+      "default": "800",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    },
+    {
+      "id": "imageCount",
+      "label": "图片数量",
+      "type": "number",
+      "default": "6",
+      "min": 3,
+      "max": 12,
+      "hint": "配图生成多少张"
+    },
+    "imageGen",
+    {
+      "id": "videoGen",
+      "label": "图生视频",
+      "default": "none",
+      "choices": [
+        {
+          "value": "none",
+          "label": "不生成视频"
+        },
+        {
+          "value": "real",
+          "label": "图片转动态视频（需开启真实出图+视频API）"
+        }
+      ]
+    }
+  ]
+}

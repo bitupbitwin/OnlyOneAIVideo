@@ -1,0 +1,39 @@
+{
+  "id": "douyin-images",
+  "platform": "douyin",
+  "mode": "images",
+  "name": "抖音 · 图集",
+  "options": [
+    { "id": "aspect", "label": "画面比例", "default": "3:4", "aspects": ["3:4", "9:16", "1:1", "16:9"] },
+    { "id": "imageCount", "label": "图片数量", "type": "number", "default": "6", "min": 3, "max": 12, "hint": "图集生成多少张" },
+    { "id": "titleMaxLen", "label": "标题字数上限", "type": "number", "default": "25", "min": 8, "max": 40 },
+    { "id": "contentLen", "label": "文案字数", "type": "number", "default": "300", "min": 80, "max": 1000, "step": 20 },
+    "imageGen",
+    {
+      "id": "videoGen",
+      "label": "图生视频",
+      "default": "none",
+      "choices": [
+        { "value": "none", "label": "不生成视频" },
+        { "value": "real", "label": "图片转动态视频（需开启真实出图+视频API）" }
+      ]
+    }
+  ],
+  "steps": [
+    { "id": "title", "name": "标题生成", "type": "title", "needs": [], "promptTemplate": "douyin/images/title.md", "humanGate": true, "defaultProvider": "cli-claude" },
+    { "id": "content", "name": "图集文案与简介", "type": "content", "needs": ["title"], "promptTemplate": "douyin/images/content.md", "defaultProvider": "cli-claude" },
+    { "use": "cover", "name": "首图/封面生成", "promptTemplate": "douyin/images/cover.md", "aspects": ["3:4", "9:16", "1:1", "16:9"] },
+    { "use": "image-prompts", "promptTemplate": "douyin/images/image-prompts.md" },
+    { "use": "batch-images", "aspects": ["3:4", "9:16", "1:1", "16:9"] },
+    { "use": "image-to-video", "when": { "imageGen": "real", "videoGen": "real" }, "aspects": ["3:4", "9:16", "1:1", "16:9"] },
+    "review"
+  ],
+  "notes": [
+    "创建时可调：画面比例、图片数量、标题/文案字数、是否真实出图、是否图生视频",
+    "「图生视频」需同时开启「真实出图」并配置视频引擎（.env 的 MV_VIDEO_API_KEY）",
+    "图集 3-12 张，首图决定点击率，必须放最强信息点；可单张重抽/替换",
+    "封面/配图比例随所选自动设定（出图时直接按比例生成，不裁剪）",
+    "图片统一风格，文字大且居中，保证手机端可读",
+    "避免图片中出现水印、二维码、其他平台 logo"
+  ]
+}

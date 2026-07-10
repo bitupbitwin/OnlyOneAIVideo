@@ -1,0 +1,27 @@
+{
+  "name": "@amp/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "bundle": "node build.mjs",
+    "dev": "node build.mjs && electron .",
+    "dist": "node build.mjs && electron-builder",
+    "typecheck": "node --check main.cjs"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^9.0.3",
+    "@fastify/static": "^8.0.3",
+    "@fastify/websocket": "^11.0.1",
+    "archiver": "^7.0.1",
+    "fastify": "^5.2.0",
+    "playwright": "^1.49.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "electron": "^38.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0"
+  }
+}

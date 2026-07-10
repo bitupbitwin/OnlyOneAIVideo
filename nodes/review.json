@@ -1,0 +1,8 @@
+{
+  "id": "review",
+  "name": "评审评分",
+  "type": "review",
+  "needs": ["title", "content"],
+  "promptTemplate": "common/review.md",
+  "defaultProvider": "api-deepseek"
+}

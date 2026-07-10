@@ -1,0 +1,74 @@
+{
+  "id": "douyin-article",
+  "platform": "douyin",
+  "mode": "article",
+  "name": "抖音 · 长文",
+  "options": [
+    {
+      "id": "aspect",
+      "default": "3:4",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1",
+        "16:9"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "30",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文/脚本字数",
+      "type": "number",
+      "default": "1200",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    }
+  ],
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "douyin/article/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "长文生成",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "douyin/article/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "promptTemplate": "douyin/article/cover.md",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1",
+        "16:9"
+      ]
+    },
+    "review"
+  ],
+  "notes": [
+    "长文建议 800-2000 字，分段清晰、每段不超过 5 行",
+    "首段 50 字内给出核心观点，避免长铺垫",
+    "封面 3:4 竖版，标题文字清晰可读",
+    "避免极限词与诱导关注话术",
+    "发布前通读一遍，检查错别字与段落排版"
+  ]
+}

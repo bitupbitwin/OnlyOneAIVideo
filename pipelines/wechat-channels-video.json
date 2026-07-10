@@ -1,0 +1,83 @@
+{
+  "id": "wechat-channels-video",
+  "platform": "wechat-channels",
+  "mode": "video",
+  "name": "微信视频号 · 视频",
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "wechat-channels/video/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "口播稿与描述生成",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "wechat-channels/video/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "promptTemplate": "wechat-channels/video/cover.md",
+      "aspects": [
+        "6:7",
+        "9:16",
+        "1:1"
+      ]
+    },
+    {
+      "id": "video",
+      "name": "分镜与剪映草稿",
+      "type": "video",
+      "needs": [
+        "content"
+      ],
+      "promptTemplate": "wechat-channels/video/storyboard.md",
+      "defaultProvider": "cli-gemini",
+      "post": "jianying-draft"
+    },
+    "review"
+  ],
+  "notes": [
+    "视频号封面显示区约 1080x1260（6:7），关键信息放中间区域",
+    "描述带 1-3 个 #话题，@相关账号需谨慎",
+    "前 5 秒钩子决定完播，结尾引导点赞+转发（视频号社交推荐权重高）",
+    "避免硬广话术，视频号对营销内容审核较严",
+    "发布后转发到朋友圈/社群可撬动初始流量"
+  ],
+  "options": [
+    {
+      "id": "aspect",
+      "default": "6:7",
+      "aspects": [
+        "6:7",
+        "9:16",
+        "1:1"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "25",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文/脚本字数",
+      "type": "number",
+      "default": "200",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    }
+  ]
+}

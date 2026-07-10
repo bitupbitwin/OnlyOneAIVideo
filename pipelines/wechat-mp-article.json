@@ -1,0 +1,74 @@
+{
+  "id": "wechat-mp-article",
+  "platform": "wechat-mp",
+  "mode": "article",
+  "name": "微信公众号 · 文章",
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "wechat-mp/article/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "文章生成",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "wechat-mp/article/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "name": "头图生成",
+      "promptTemplate": "wechat-mp/article/cover.md",
+      "aspects": [
+        "2.35:1",
+        "16:9",
+        "1:1"
+      ]
+    },
+    "review"
+  ],
+  "notes": [
+    "标题不超过 64 字，摘要不超过 120 字",
+    "头图 2.35:1（900x383），同时准备 1:1 缩略图",
+    "正文使用小标题分段，每段配图位置预留",
+    "原创文章记得声明原创，引用注明出处",
+    "群发前用「预览」在手机上检查排版",
+    "避免诱导分享/关注话术（违反运营规范会被处罚）"
+  ],
+  "options": [
+    {
+      "id": "aspect",
+      "default": "2.35:1",
+      "aspects": [
+        "2.35:1",
+        "16:9",
+        "1:1"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "30",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文/脚本字数",
+      "type": "number",
+      "default": "2000",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    }
+  ]
+}

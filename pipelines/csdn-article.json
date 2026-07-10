@@ -1,0 +1,72 @@
+{
+  "id": "csdn-article",
+  "platform": "csdn",
+  "mode": "article",
+  "name": "CSDN · 技术博客",
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "csdn/article/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "博文生成（Markdown+摘要+标签）",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "csdn/article/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "promptTemplate": "csdn/article/cover.md",
+      "aspects": [
+        "16:9",
+        "1:1"
+      ]
+    },
+    "review"
+  ],
+  "notes": [
+    "正文用 CSDN Markdown 编辑器粘贴；首行 @[TOC](标题) 自动生成目录",
+    "代码块标注语言以启用高亮；mermaid 图表与 KaTeX 公式 CSDN 原生支持",
+    "摘要不超过 256 字，填入发布页「摘要」栏，影响搜索与推荐展示",
+    "标签 3-5 个，选 CSDN 已有的精准技术标签（便于被检索与归类）",
+    "声明「原创」并自查是否引用了他人代码/图片（注明出处）",
+    "封面建议 16:9，含中文主标题、科技感配色，列表页缩略也清晰",
+    "文末互动引导语已固定附加（点赞/关注/评论三连）"
+  ],
+  "options": [
+    {
+      "id": "aspect",
+      "default": "16:9",
+      "aspects": [
+        "16:9",
+        "1:1"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "30",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文/脚本字数",
+      "type": "number",
+      "default": "2500",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    }
+  ]
+}

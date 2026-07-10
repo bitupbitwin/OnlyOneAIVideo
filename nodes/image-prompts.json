@@ -1,0 +1,8 @@
+{
+  "id": "image-prompts",
+  "name": "内容配图提示词（多张）",
+  "type": "image-prompts",
+  "needs": ["content"],
+  "promptTemplate": "common/content-image-prompts.md",
+  "defaultProvider": "cli-claude"
+}

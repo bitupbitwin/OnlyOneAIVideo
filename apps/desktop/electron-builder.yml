@@ -1,0 +1,28 @@
+appId: com.amp.workbench
+productName: 自媒体内容工作台
+directories:
+  output: release
+files:
+  - main.cjs
+  - dist/**
+extraResources:
+  - from: ../../prompts
+    to: app-root/prompts
+  - from: ../../pipelines
+    to: app-root/pipelines
+  - from: ../../scripts
+    to: app-root/scripts
+  - from: ../web/dist
+    to: app-root/apps/web/dist
+asarUnpack:
+  - "**/node_modules/sharp/**"
+  - "**/node_modules/@img/**"
+win:
+  target: nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target: dmg
+linux:
+  target: AppImage

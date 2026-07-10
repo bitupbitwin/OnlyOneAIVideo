@@ -1,0 +1,83 @@
+{
+  "id": "xhs-video",
+  "platform": "xiaohongshu",
+  "mode": "video",
+  "name": "小红书 · 视频笔记",
+  "steps": [
+    {
+      "id": "title",
+      "name": "标题生成",
+      "type": "title",
+      "needs": [],
+      "promptTemplate": "xiaohongshu/video/title.md",
+      "humanGate": true,
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "id": "content",
+      "name": "口播稿生成",
+      "type": "content",
+      "needs": [
+        "title"
+      ],
+      "promptTemplate": "xiaohongshu/video/content.md",
+      "defaultProvider": "cli-claude"
+    },
+    {
+      "use": "cover",
+      "promptTemplate": "xiaohongshu/video/cover.md",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1"
+      ]
+    },
+    {
+      "id": "video",
+      "name": "分镜与剪映草稿",
+      "type": "video",
+      "needs": [
+        "content"
+      ],
+      "promptTemplate": "xiaohongshu/video/storyboard.md",
+      "defaultProvider": "cli-gemini",
+      "post": "jianying-draft"
+    },
+    "review"
+  ],
+  "notes": [
+    "视频时长建议 30-90 秒，信息密度高于抖音",
+    "标题不超过 20 字，封面与标题信息一致",
+    "正文描述带 3-6 个话题标签",
+    "封面 3:4，避免纯视频截帧（建议设计感封面）",
+    "严禁站外引流（微信号/二维码）"
+  ],
+  "options": [
+    {
+      "id": "aspect",
+      "default": "3:4",
+      "aspects": [
+        "3:4",
+        "9:16",
+        "1:1"
+      ]
+    },
+    {
+      "id": "titleMaxLen",
+      "label": "标题字数上限",
+      "type": "number",
+      "default": "20",
+      "min": 8,
+      "max": 80
+    },
+    {
+      "id": "contentLen",
+      "label": "正文/脚本字数",
+      "type": "number",
+      "default": "300",
+      "min": 80,
+      "max": 4000,
+      "step": 50
+    }
+  ]
+}

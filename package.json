@@ -1,0 +1,19 @@
+{
+  "name": "auto-media-product",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"pnpm --filter @amp/server dev\" \"pnpm --filter @amp/web dev\"",
+    "build": "pnpm --filter @amp/web build",
+    "start": "pnpm --filter @amp/server start",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

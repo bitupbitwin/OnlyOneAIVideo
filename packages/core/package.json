@@ -1,0 +1,21 @@
+{
+  "name": "@amp/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@amp/jianying": "workspace:*",
+    "@amp/review": "workspace:*",
+    "@amp/shared": "workspace:*",
+    "docx": "^9.0.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

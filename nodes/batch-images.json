@@ -1,0 +1,9 @@
+{
+  "id": "batch-images",
+  "name": "批量出图（按内容逐张生成）",
+  "type": "batch-images",
+  "needs": ["image-prompts"],
+  "promptTemplate": "",
+  "defaultProvider": "api-mv-images",
+  "when": { "imageGen": "real" }
+}

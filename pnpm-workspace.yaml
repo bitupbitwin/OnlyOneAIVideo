@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+onlyBuiltDependencies:
+  - sharp
+  - esbuild
+  - electron
+# 供应链安全：只使用发布满 3 天的包版本
+minimumReleaseAge: 4320
+allowBuilds:
+  better-sqlite3: set this to true or false
+  electron: true
+  esbuild: false
+  sharp: true
