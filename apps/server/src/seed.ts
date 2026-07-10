@@ -52,6 +52,21 @@ export function seedProviders(repo: Repo, rootDir: string) {
       enabled: true,
     });
   }
+  // Edge-TTS：微软免费在线配音，无需 key（需联网；音色/语速可在引擎管理里改 config）
+  if (!repo.getProvider("tts-edge")) {
+    repo.upsertProvider({
+      id: "tts-edge",
+      kind: "tts",
+      name: "Edge-TTS 免费配音（晓晓·在线，无需key）",
+      config: {
+        voice: env.AMP_TTS_VOICE || "zh-CN-XiaoxiaoNeural",
+        rate: env.AMP_TTS_RATE || "+0%",
+        volume: "+0%",
+      },
+      maxConcurrency: 2,
+      enabled: true,
+    });
+  }
 
   const cli = (id: string, name: string, bin: string, sub: string) =>
     ensure(
