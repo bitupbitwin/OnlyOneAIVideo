@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS packages (
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_topic_platform ON packages(topic_id, platform);
 CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -168,6 +169,12 @@ export class Repo {
       return;
     }
     if (!hasTopics) this.db.exec(SCHEMA);
+    // 老库补建索引（packages upsert 依赖）
+    try {
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_topic_platform ON packages(topic_id, platform);");
+    } catch {
+      // 存量重复行导致建索引失败时不阻断启动
+    }
     this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   }
 
@@ -300,8 +307,8 @@ export class Repo {
   listStepsByTopic(topicId: number): StepRow[] {
     return (this.db.prepare(`SELECT * FROM steps WHERE topic_id = ? ORDER BY CASE step_id
       WHEN 'analyze' THEN 1 WHEN 'title' THEN 2 WHEN 'script' THEN 3 WHEN 'storyboard' THEN 4
-      WHEN 'frames' THEN 5 WHEN 'video' THEN 6 WHEN 'tts' THEN 7 WHEN 'compose' THEN 8
-      WHEN 'review' THEN 9 WHEN 'adapt' THEN 10 ELSE 99 END`).all(topicId) as any[]).map(mapStep);
+      WHEN 'cover' THEN 5 WHEN 'frames' THEN 6 WHEN 'video' THEN 7 WHEN 'tts' THEN 8
+      WHEN 'compose' THEN 9 WHEN 'review' THEN 10 WHEN 'adapt' THEN 11 ELSE 99 END`).all(topicId) as any[]).map(mapStep);
   }
 
   setStepStatus(id: number, status: StepStatus, patch: { error?: string | null; started?: boolean; finished?: boolean } = {}) {
@@ -396,6 +403,50 @@ export class Repo {
       .prepare("SELECT * FROM artifacts WHERE step_id = ? AND selected = 1 ORDER BY id DESC LIMIT 1")
       .get(stepId) as any;
     return row ? mapArtifact(row) : undefined;
+  }
+
+  /** 重跑覆盖：删除该步骤最新版本之前的所有产物记录（磁盘文件保留）。封面步骤不调用（候选永久保留可对比）。 */
+  purgeOldArtifactVersions(stepId: number) {
+    this.db
+      .prepare(
+        "DELETE FROM artifacts WHERE step_id = ? AND version < (SELECT COALESCE(MAX(version), 0) FROM artifacts WHERE step_id = ?)"
+      )
+      .run(stepId, stepId);
+  }
+
+  upsertPackage(p: {
+    topicId: number;
+    platform: string;
+    videoPath?: string | null;
+    title?: string | null;
+    caption?: string | null;
+    coverPaths?: string[];
+    checklist?: string[];
+    status?: PackageRow["status"];
+  }): PackageRow {
+    this.db
+      .prepare(
+        `INSERT INTO packages (topic_id, platform, video_path, title, caption, cover_paths_json, checklist_json, status, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+         ON CONFLICT(topic_id, platform) DO UPDATE SET
+           video_path=excluded.video_path, title=excluded.title, caption=excluded.caption,
+           cover_paths_json=excluded.cover_paths_json, checklist_json=excluded.checklist_json,
+           status=excluded.status, updated_at=excluded.updated_at`
+      )
+      .run(
+        p.topicId,
+        p.platform,
+        p.videoPath ?? null,
+        p.title ?? null,
+        p.caption ?? null,
+        JSON.stringify(p.coverPaths ?? []),
+        JSON.stringify(p.checklist ?? []),
+        p.status ?? "draft"
+      );
+    const row = this.db
+      .prepare("SELECT * FROM packages WHERE topic_id = ? AND platform = ?")
+      .get(p.topicId, p.platform) as any;
+    return mapPackage(row);
   }
 
   listPackages(topicId: number): PackageRow[] {

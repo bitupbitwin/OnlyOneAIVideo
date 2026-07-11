@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, connectWs, STATUS_LABEL } from "../api";
 
@@ -10,10 +10,22 @@ export function TopicWorkbench() {
   const [busy, setBusy] = useState("");
   const [uploading, setUploading] = useState(false);
   const [composeProgress, setComposeProgress] = useState<{ pct: number; message?: string } | null>(null);
+  const [coverPrompt, setCoverPrompt] = useState("");
+  const coverPromptDirty = useRef(false);
+  const [platforms, setPlatforms] = useState<any[]>([]);
+  const [chosenPlatforms, setChosenPlatforms] = useState<string[]>([]);
 
   const load = () => {
     api.get<any>(`/api/topics/${id}`).then(setTopic).catch((e) => setError(e.message));
     api.get<any[]>("/api/providers").then(setProviders).catch(() => undefined);
+    api.get<any[]>("/api/platforms").then((list) => {
+      setPlatforms(list);
+      setChosenPlatforms((prev) => (prev.length ? prev : list.map((p) => p.id)));
+    }).catch(() => undefined);
+    api.get<{ prompt: string }>(`/api/topics/${id}/cover-prompt`).then((r) => {
+      // 用户正在润色时不要覆盖输入框
+      if (!coverPromptDirty.current) setCoverPrompt(r.prompt);
+    }).catch(() => undefined);
   };
   useEffect(() => {
     load();
@@ -144,7 +156,7 @@ export function TopicWorkbench() {
             const previousDone = topic.steps
               .slice(0, stepIndex)
               .every((previous: any) => previous.status === "succeeded" || previous.status === "skipped");
-            const canRunStep = s.status === "pending" && previousDone;
+            const canRunStep = s.status === "pending" && previousDone && s.step_id !== "adapt";
             return (
             <div className="step-card" key={s.id}>
               <div className="row" style={{ justifyContent: "space-between" }}>
@@ -193,9 +205,11 @@ export function TopicWorkbench() {
                     </option>
                   ))}
                 </select>
-                <button className="ghost small" onClick={() => act(() => api.post(`/api/steps/${s.id}/rerun`), "rerun")}>
-                  重跑
-                </button>
+                {s.step_id !== "adapt" && (
+                  <button className="ghost small" onClick={() => act(() => api.post(`/api/steps/${s.id}/rerun`), "rerun")}>
+                    重跑
+                  </button>
+                )}
                 {s.status === "waiting_human" && (
                   <button className="small" onClick={() => act(() => api.post(`/api/steps/${s.id}/confirm`), "confirm")}>
                     确认
@@ -203,17 +217,104 @@ export function TopicWorkbench() {
                 )}
               </div>
 
+              {s.step_id === "cover" && (
+                <div className="cover-prompt" style={{ marginTop: 8 }}>
+                  <div className="muted" style={{ marginBottom: 4 }}>
+                    封面提示词（分镜表 index0 自动填入，可手动润色后再运行/重跑；重跑分镜表会刷新为新初稿）
+                  </div>
+                  <textarea
+                    value={coverPrompt}
+                    rows={4}
+                    style={{ width: "100%", boxSizing: "border-box" }}
+                    placeholder="先生成分镜表，或直接在此填写封面出图提示词"
+                    onChange={(e) => {
+                      coverPromptDirty.current = true;
+                      setCoverPrompt(e.target.value);
+                    }}
+                  />
+                  <button
+                    className="small"
+                    disabled={!coverPrompt.trim()}
+                    onClick={() =>
+                      act(async () => {
+                        await api.put(`/api/topics/${id}/cover-prompt`, { prompt: coverPrompt });
+                        coverPromptDirty.current = false;
+                      }, "cover-prompt")
+                    }
+                  >
+                    保存提示词
+                  </button>
+                </div>
+              )}
+
+              {s.step_id === "review" && (s.artifacts ?? []).length > 0 && (
+                <ReviewPanel
+                  artifacts={s.artifacts}
+                  onRerunWith={(target: string, feedback: string) => {
+                    const targetStep = topic.steps.find((candidate: any) => candidate.step_id === target);
+                    if (targetStep) act(() => api.post(`/api/steps/${targetStep.id}/rerun`, { feedback }), "rerun-with-feedback");
+                  }}
+                />
+              )}
+
+              {s.step_id === "adapt" && (
+                <div className="adapt-panel" style={{ marginTop: 8 }}>
+                  <div className="muted" style={{ marginBottom: 4 }}>选择要分发的平台（同一条母版派生，不重新生成内容）：</div>
+                  <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                    {platforms.map((p) => (
+                      <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={chosenPlatforms.includes(p.id)}
+                          onChange={(e) =>
+                            setChosenPlatforms((prev) =>
+                              e.target.checked ? [...prev, p.id] : prev.filter((x) => x !== p.id)
+                            )
+                          }
+                        />
+                        {p.name}
+                      </label>
+                    ))}
+                  </div>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button
+                      className="small"
+                      disabled={chosenPlatforms.length === 0 || s.status === "running"}
+                      onClick={() => act(() => api.post(`/api/topics/${id}/adapt`, { platforms: chosenPlatforms }), "adapt")}
+                    >
+                      {s.status === "running" ? "生成中..." : "生成发布包"}
+                    </button>
+                    {(topic.packages ?? []).length > 0 && (
+                      <a href={`/api/topics/${id}/export`} download>
+                        📦 导出全部发布包 ZIP
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {(s.artifacts ?? []).length > 0 && s.step_id === "title" && (
                 <TitleCandidates
                   artifacts={s.artifacts}
                   onSelect={(artifactId) => act(() => api.post(`/api/artifacts/${artifactId}/select`), "select")}
                 />
               )}
-              {(s.artifacts ?? []).length > 0 && s.step_id !== "title" && (
-                <div className={`artifacts ${["frames", "video", "tts", "compose"].includes(s.step_id) ? "artifacts-grid" : ""}`}>
+              {(s.artifacts ?? []).length > 0 && s.step_id !== "title" && s.step_id !== "review" && (
+                <div className={`artifacts ${["cover", "frames", "video", "tts", "compose", "adapt"].includes(s.step_id) ? "artifacts-grid" : ""}`}>
                   {s.artifacts.map((a: any) => (
-                    <div className={`artifact ${["frames", "video", "tts", "compose"].includes(s.step_id) ? "artifact-media" : ""}`} key={a.id}>
-                      <div className="artifact-label">{a.label ?? a.role ?? a.kind}</div>
+                    <div className={`artifact ${["cover", "frames", "video", "tts", "compose", "adapt"].includes(s.step_id) ? "artifact-media" : ""}`} key={a.id}>
+                      <div className="artifact-label">
+                        {s.step_id === "cover" && (
+                          <input
+                            type="radio"
+                            name="cover-select"
+                            checked={a.selected}
+                            onChange={() => act(() => api.post(`/api/artifacts/${a.id}/select`), "select-cover")}
+                            title="选为最终封面（发布包会用它派生各平台尺寸）"
+                          />
+                        )}
+                        {a.label ?? a.role ?? a.kind}
+                      </div>
                       {a.content && <pre>{a.content}</pre>}
                       {a.kind === "video" && a.file_path && (
                         <video
@@ -270,9 +371,92 @@ function mediaModeLabel(mode?: string) {
 }
 
 function providerMatchesStep(provider: any, stepId: string) {
-  if (stepId === "frames") return provider.kind === "api-image";
+  if (stepId === "cover" || stepId === "frames") return provider.kind === "api-image";
   if (stepId === "video") return provider.kind === "api-video";
   if (stepId === "tts") return provider.kind === "tts";
   if (stepId === "compose") return false;
   return provider.kind === "cli" || provider.kind === "api-text";
 }
+
+/** 评审报告：只报告不自动重跑；不合格时提供「按建议重跑」按钮由用户决定 */
+function ReviewPanel({ artifacts, onRerunWith }: { artifacts: any[]; onRerunWith: (target: string, feedback: string) => void }) {
+  const latest = [...artifacts].reverse().find((a) => a.role === "review" && a.content);
+  if (!latest) return null;
+  let report: any = null;
+  try {
+    report = JSON.parse(latest.content);
+  } catch {
+    return <pre>{latest.content}</pre>;
+  }
+  const items: any[] = Array.isArray(report?.items) ? report.items : Array.isArray(report) ? report : [];
+  const ruleIssues: string[] = report?.ruleIssues ?? [];
+  const targetName = (t: string) => (t === "script" ? "口播稿" : "标题");
+  return (
+    <div className="review-panel" style={{ marginTop: 8 }}>
+      {report?.note && <div className="muted">⚠ {report.note}</div>}
+      {ruleIssues.length > 0 && (
+        <div className="error-text" style={{ margin: "6px 0" }}>
+          规则预检命中：
+          <ul style={{ margin: "4px 0 0 18px" }}>
+            {ruleIssues.map((issue, i) => (
+              <li key={i}>{issue}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {ruleIssues.length === 0 && items.length > 0 && <div className="muted">规则预检：未命中极限词/敏感词 ✓</div>}
+      {items.map((item, i) => (
+        <div key={i} style={{ border: "1px solid #333", borderRadius: 6, padding: 8, margin: "6px 0" }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <strong>{targetName(item.target)}</strong>
+            <span className={`badge ${item.verdict === "pass" ? "succeeded" : "failed"}`}>
+              {item.total} 分 · {item.verdict === "pass" ? "通过" : item.verdict === "reject" ? "不合格" : "建议修改"}
+            </span>
+          </div>
+          <div className="muted" style={{ marginTop: 4 }}>
+            {Object.entries(item.scores ?? {})
+              .map(([k, v]) => `${SCORE_LABEL[k] ?? k} ${v}`)
+              .join(" · ")}
+          </div>
+          {(item.issues ?? []).length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              问题：
+              <ul style={{ margin: "2px 0 0 18px" }}>
+                {item.issues.map((issue: string, j: number) => (
+                  <li key={j}>{issue}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(item.suggestions ?? []).length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              建议：
+              <ul style={{ margin: "2px 0 0 18px" }}>
+                {item.suggestions.map((sug: string, j: number) => (
+                  <li key={j}>{sug}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {item.verdict !== "pass" && (item.suggestions ?? []).length > 0 && (
+            <button
+              className="ghost small"
+              style={{ marginTop: 6 }}
+              onClick={() => onRerunWith(item.target === "script" ? "script" : "title", item.suggestions.join("；"))}
+            >
+              按建议重跑{targetName(item.target)}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const SCORE_LABEL: Record<string, string> = {
+  hook: "钩子",
+  clarity: "清晰",
+  platform_fit: "平台适配",
+  compliance: "合规",
+  seo: "SEO",
+};

@@ -292,6 +292,44 @@ function escapeFilterPath(p: string): string {
   return p.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
+/**
+ * 平台派生：把 9:16 母版转成目标比例。
+ * 竖比例（高>宽）→ 中心裁切；方形/横比例 → 原片适配 + 高斯模糊背景 pad。
+ * 目标与母版一致时调用方应直接复制文件，不走本函数。
+ */
+export async function deriveAspectVideo(masterPath: string, outPath: string, aspect: string): Promise<void> {
+  const [aw, ah] = aspect.split(":").map((s) => parseInt(s, 10));
+  if (!aw || !ah) throw new Error(`非法比例: ${aspect}`);
+  const portrait = ah > aw;
+  let filter: string;
+  if (portrait) {
+    // 如 3:4 → 1080x1440 中心裁切（母版 1080x1920 裁高）
+    const targetH = Math.round((WIDTH * ah) / aw / 2) * 2;
+    filter = `[0:v]crop=${WIDTH}:${Math.min(targetH, HEIGHT)}:(iw-${WIDTH})/2:(ih-${Math.min(targetH, HEIGHT)})/2[v]`;
+  } else {
+    // 1:1 → 1080x1080；16:9 → 1920x1080：模糊背景 + 原片居中
+    const canvasW = aw === ah ? WIDTH : 1920;
+    const canvasH = aw === ah ? WIDTH : 1080;
+    filter =
+      `[0:v]split[b0][f0];` +
+      `[b0]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=increase,crop=${canvasW}:${canvasH},boxblur=20:2[bg];` +
+      `[f0]scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease[fg];` +
+      `[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]`;
+  }
+  await runFfmpeg(
+    [
+      "-i", masterPath,
+      "-filter_complex", filter,
+      "-map", "[v]", "-map", "0:a?",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+      "-c:a", "copy",
+      "-movflags", "+faststart",
+      outPath,
+    ],
+    { timeoutMs: FINAL_TIMEOUT_MS, logDir: path.dirname(outPath) }
+  );
+}
+
 interface RunOptions {
   timeoutMs: number;
   /** 失败时写 ffmpeg-error.log 的目录 */

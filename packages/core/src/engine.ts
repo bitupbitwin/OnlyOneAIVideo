@@ -1,14 +1,15 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import sharp from "sharp";
 import { extractJson, renderTemplate } from "@amp/shared";
-import type { EngineEvent, GenerateResult, RuntimeSceneGraph, StepId, TopicStatus } from "@amp/shared";
+import type { EngineEvent, GenerateResult, PlatformSpec, RuntimeSceneGraph, StepId, TopicStatus } from "@amp/shared";
 import { ruleCheck } from "@amp/review";
 import type { Repo, StepRow } from "./db.js";
 import type { ProviderRegistry } from "./registry.js";
 import type { TemplateStore } from "./templates.js";
 import { initialStepStatus, MAINLINE, MAINLINE_STEP_DEFS, type StepDefMeta } from "./stepDefs.js";
-import { composeMaster, probeDurationSec, type ComposeSceneInput } from "./compose.js";
+import { composeMaster, deriveAspectVideo, probeDurationSec, type ComposeSceneInput } from "./compose.js";
 
 const STEP_TIMEOUT_MS = 10 * 60 * 1000;
 /** 镜头间呼吸间隔（实现设计 §5.3 Hard-cut 模型） */
@@ -25,6 +26,7 @@ export class PipelineEngine extends EventEmitter {
   private topicInflight = new Set<number>();
   private feedback = new Map<number, string>();
   private adaptRequested = new Set<number>();
+  private adaptPlatforms = new Map<number, string[]>();
 
   constructor(
     private repo: Repo,
@@ -260,7 +262,9 @@ export class PipelineEngine extends EventEmitter {
       this.repo.setStepStatus(step.id, "running", { started: true, error: null });
       this.emitEvent({ type: "step-status", topicId: step.topic_id, stepId: step.id, data: { status: "running" } });
 
-      if (step.step_id === "frames") {
+      if (step.step_id === "cover") {
+        await this.runCover(step);
+      } else if (step.step_id === "frames") {
         await this.runFrames(step);
       } else if (step.step_id === "video") {
         await this.runVideo(step);
@@ -271,12 +275,16 @@ export class PipelineEngine extends EventEmitter {
       } else if (step.step_id === "review") {
         await this.runReview(step);
       } else if (step.step_id === "adapt") {
-        throw new Error("M5 平台派生尚未实现");
+        await this.runAdapt(step);
       } else {
         await this.runProviderTextStep(step);
       }
 
       const latest = this.repo.getStep(step.id)!;
+      // 重跑覆盖：本次成功后清掉旧版本产物（封面例外——候选永久保留供对比）
+      if (step.step_id !== "cover" && (latest.status === "running" || latest.status === "waiting_human")) {
+        this.repo.purgeOldArtifactVersions(step.id);
+      }
       if (latest.status === "running") {
         this.repo.setStepStatus(step.id, "succeeded", { finished: true, error: null });
         this.emitEvent({ type: "step-status", topicId: step.topic_id, stepId: step.id, data: { status: "succeeded" } });
@@ -363,10 +371,21 @@ export class PipelineEngine extends EventEmitter {
     if (step.step_id === "storyboard") {
       const parsed = extractJson<RuntimeSceneGraph>(text);
       if (!parsed?.scenes?.length) throw new Error("分镜表输出无法解析为 V2 JSON：需要 scenes 数组");
+      // index 0 = 封面提示词条目（只有 visual），copy 到 coverPrompt 供封面模块润色后出图；
+      // 重跑分镜表会刷新这份 copy（分镜变了封面初稿也应更新）
+      const coverEntry = parsed.scenes.find(
+        (scene) => Number(scene.index ?? -1) === 0 || (!String(scene.narration ?? "").trim() && scene.visual)
+      );
+      const sceneEntries = parsed.scenes.filter((scene) => scene !== coverEntry);
+      if (sceneEntries.length === 0) throw new Error("分镜表中没有镜头条目（index 1 起）");
+      const title = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(step.topic_id, "title")!.id)?.content ?? "";
       const normalized: RuntimeSceneGraph = {
         bgmMood: parsed.bgmMood,
-        scenes: parsed.scenes.map((scene, idx) => ({
-          index: Number(scene.index ?? idx + 1),
+        coverPrompt: coverEntry?.visual
+          ? String(coverEntry.visual).trim()
+          : `短视频封面，1080x1920 竖版，主题「${title}」。${sceneEntries[0]?.visual ?? ""} 构图醒目、主体居中、预留标题文字位置。`,
+        scenes: sceneEntries.map((scene, idx) => ({
+          index: idx + 1,
           narration: String(scene.narration ?? "").trim(),
           subtitle: String(scene.subtitle ?? scene.narration ?? "").trim(),
           source: scene.source === "footage" ? "footage" : "generated",
@@ -424,20 +443,62 @@ export class PipelineEngine extends EventEmitter {
         release();
       }
     }
-    const firstFrame = graph.scenes.find((scene) => scene.framePath)?.framePath;
-    if (firstFrame) {
-      const cover = this.repo.createArtifact({
-        stepId: step.id,
-        version,
-        kind: "image",
-        role: "cover",
-        filePath: firstFrame,
-        label: "封面（复用首镜，不额外消耗出图额度）",
-        meta: { source: "first-frame" },
-      });
-      this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: cover });
-    }
     this.writeRuntime(step.topic_id, graph);
+  }
+
+  /** 封面出图：提示词来自 runtime.coverPrompt（分镜表 index0 的 copy，允许用户润色后再跑）。
+   *  候选不做重跑覆盖——历史封面永久保留，便于对比挑选。 */
+  private async runCover(step: StepRow) {
+    const graph = this.readRuntime(step.topic_id);
+    const prompt = graph.coverPrompt?.trim();
+    if (!prompt) throw new Error("缺少封面提示词：请先生成分镜表，或在封面模块手动填写提示词后再运行");
+    if (!step.provider_id) throw new Error("cover 步骤未绑定出图引擎");
+    const provider = this.registry.get(step.provider_id);
+    const version = this.repo.nextArtifactVersion(step.id);
+    const outDir = this.stepDir(step, version);
+    const title = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(step.topic_id, "title")!.id)?.content ?? "";
+    this.repo.setStepPrompt(step.id, prompt);
+
+    const release = await this.registry.semaphore(provider.row).acquire();
+    try {
+      const result = await provider.generate({
+        taskId: String(step.id),
+        stepType: "cover",
+        prompt,
+        timeoutMs: STEP_TIMEOUT_MS,
+        outDir,
+        imageCount: 3,
+        imageSize: "1080x1920",
+        overlayText: title, // 叠字类引擎（Grok底图+程序叠字）会把标题精确压到底图上；其他引擎忽略
+      });
+      if (result.kind !== "images" || result.files.length === 0) throw new Error("封面引擎未返回图片");
+      const hadSelected = !!this.repo.selectedArtifact(step.id);
+      result.files.forEach((file, i) => {
+        const artifact = this.repo.createArtifact({
+          stepId: step.id,
+          version,
+          kind: "image",
+          role: "cover",
+          filePath: file,
+          label: `封面候选 v${version}-${i + 1}`,
+          selected: !hadSelected && i === 0,
+        });
+        this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: artifact });
+      });
+    } finally {
+      release();
+    }
+  }
+
+  getCoverPrompt(topicId: number): string {
+    return this.readRuntime(topicId).coverPrompt ?? "";
+  }
+
+  setCoverPrompt(topicId: number, prompt: string) {
+    if (!prompt?.trim()) throw new Error("封面提示词不能为空");
+    const graph = this.readRuntime(topicId);
+    graph.coverPrompt = prompt.trim();
+    this.writeRuntime(topicId, graph);
   }
 
   private async runTts(step: StepRow) {
@@ -646,25 +707,221 @@ export class PipelineEngine extends EventEmitter {
     this.writeRuntime(step.topic_id, graph);
   }
 
+  /**
+   * 评审 = 本地规则预检（极限词/敏感词）+ LLM 多维打分。
+   * 只报告不重跑：verdict 不合格时也把结果展示给用户，由用户决定是否点「按建议重跑」。
+   */
   private async runReview(step: StepRow) {
     const title = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(step.topic_id, "title")!.id)?.content ?? "";
     const script = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(step.topic_id, "script")!.id)?.content ?? "";
-    const issues = [...ruleCheck(title), ...ruleCheck(script)];
-    const text = JSON.stringify(
-      [
-        {
-          target: "title",
-          scores: { compliance: issues.length ? 6 : 9 },
-          total: issues.length ? 70 : 86,
-          verdict: issues.length ? "revise" : "pass",
-          issues,
-          suggestions: issues.length ? ["请替换命中的极限词或敏感词"] : [],
-        },
-      ],
-      null,
-      2
-    );
+    const ruleIssues = [
+      ...ruleCheck(title).map((issue) => `标题：${issue}`),
+      ...ruleCheck(script).map((issue) => `口播稿：${issue}`),
+    ];
+
+    let items: any[] = [];
+    let note: string | undefined;
+    if (!step.provider_id) {
+      note = "评审未绑定引擎，仅执行本地规则预检";
+    } else {
+      try {
+        const provider = this.registry.get(step.provider_id);
+        const prompt = this.composePrompt(step);
+        this.repo.setStepPrompt(step.id, prompt);
+        const release = await this.registry.semaphore(provider.row).acquire();
+        let result: GenerateResult;
+        try {
+          result = await provider.generate(
+            { taskId: String(step.id), stepType: "review", prompt, timeoutMs: STEP_TIMEOUT_MS },
+            (chunk) => this.emitEvent({ type: "step-stream", topicId: step.topic_id, stepId: step.id, data: { chunk } })
+          );
+        } finally {
+          release();
+        }
+        if (result.kind !== "text") throw new Error("评审引擎未返回文本");
+        const parsed = extractJson<any[]>(result.text);
+        if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("评审输出无法解析为 JSON 数组");
+        items = parsed.map((item) => ({
+          target: item.target === "script" ? "script" : "title",
+          scores: item.scores ?? {},
+          total: Number(item.total ?? 0),
+          verdict: item.verdict === "pass" ? "pass" : item.verdict === "reject" ? "reject" : "revise",
+          issues: Array.isArray(item.issues) ? item.issues.map(String) : [],
+          suggestions: Array.isArray(item.suggestions) ? item.suggestions.map(String) : [],
+        }));
+      } catch (err: any) {
+        note = `LLM 评审失败（${err?.message ?? String(err)}），以下仅为本地规则预检结果`;
+      }
+    }
+
+    const report = { mode: "report-only", items, ruleIssues, note };
     const version = this.repo.nextArtifactVersion(step.id);
-    this.repo.createArtifact({ stepId: step.id, version, kind: "text", role: "review", content: text, selected: true });
+    const artifact = this.repo.createArtifact({
+      stepId: step.id,
+      version,
+      kind: "text",
+      role: "review",
+      content: JSON.stringify(report, null, 2),
+      selected: true,
+    });
+    this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: artifact });
+    this.emitEvent({ type: "review", topicId: step.topic_id, stepId: step.id, data: report });
+  }
+
+  /** 平台派生入口：校验母版存在后直接执行 adapt 步骤（不经主线推进，避免被前置步骤拦住） */
+  requestAdapt(topicId: number, platforms: string[]) {
+    const specs = this.templates.listPlatforms();
+    if (specs.length === 0) throw new Error("缺少 platforms/platforms.json 平台参数表");
+    if (!platforms?.length) throw new Error("请至少选择一个平台");
+    const unknown = platforms.filter((p) => !specs.some((spec) => spec.id === p));
+    if (unknown.length) throw new Error(`未知平台: ${unknown.join(", ")}`);
+    if (!this.findMasterPath(topicId)) throw new Error("请先完成「合成母版」，再生成发布包");
+    const adaptStep = this.repo.getStepByTopicAndStep(topicId, "adapt");
+    if (!adaptStep) throw new Error("adapt 步骤不存在");
+    if (this.inflight.has(adaptStep.id)) throw new Error("发布包正在生成中，请稍候");
+
+    this.adaptPlatforms.set(topicId, platforms);
+    this.repo.setStepStatus(adaptStep.id, "running", { started: true, error: null });
+    this.emitEvent({ type: "step-status", topicId, stepId: adaptStep.id, data: { status: "running" } });
+    this.inflight.add(adaptStep.id);
+    void this.runStep(adaptStep.id).finally(() => {
+      this.inflight.delete(adaptStep.id);
+      this.refreshTopicStatus(topicId);
+    });
+  }
+
+  private findMasterPath(topicId: number): string | undefined {
+    const composeStep = this.repo.getStepByTopicAndStep(topicId, "compose");
+    if (!composeStep) return undefined;
+    const masters = this.repo.listArtifactsByStep(composeStep.id).filter((a) => a.role === "master" && a.file_path);
+    const master = masters.find((a) => a.selected) ?? masters.at(-1);
+    return master?.file_path && fs.existsSync(master.file_path) ? master.file_path : undefined;
+  }
+
+  private async runAdapt(step: StepRow) {
+    const topicId = step.topic_id;
+    const specs = this.templates.listPlatforms();
+    const chosen = this.adaptPlatforms.get(topicId) ?? specs.map((spec) => spec.id);
+    const selectedSpecs = specs.filter((spec) => chosen.includes(spec.id));
+    if (selectedSpecs.length === 0) throw new Error("没有可用平台（检查 platforms/platforms.json）");
+
+    const masterPath = this.findMasterPath(topicId);
+    if (!masterPath) throw new Error("缺少母版成片，请先完成「合成母版」");
+    const coverStep = this.repo.getStepByTopicAndStep(topicId, "cover");
+    const coverArtifacts = coverStep ? this.repo.listArtifactsByStep(coverStep.id).filter((a) => a.role === "cover") : [];
+    const coverArtifact = coverArtifacts.find((a) => a.selected) ?? coverArtifacts.at(-1);
+    const coverSrc =
+      coverArtifact?.file_path && fs.existsSync(coverArtifact.file_path) ? coverArtifact.file_path : undefined;
+    const title = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(topicId, "title")!.id)?.content ?? "";
+    const script = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(topicId, "script")!.id)?.content ?? "";
+    const version = this.repo.nextArtifactVersion(step.id);
+
+    for (const spec of selectedSpecs) {
+      this.emitEvent({
+        type: "step-stream",
+        topicId,
+        stepId: step.id,
+        data: { chunk: `【${spec.name}】发布包生成中...\n` },
+      });
+      const pkgDir = path.join(this.workspaceDir, `topic-${topicId}`, "packages", spec.id);
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      // 1) 视频转比例：与母版同比例直接复用，否则裁切/模糊 pad
+      const videoOut = path.join(pkgDir, "video.mp4");
+      if (spec.aspect === "9:16") fs.copyFileSync(masterPath, videoOut);
+      else await deriveAspectVideo(masterPath, videoOut, spec.aspect);
+
+      // 2) 封面按平台尺寸派生
+      let coverOut: string | undefined;
+      if (coverSrc) {
+        coverOut = path.join(pkgDir, "cover.jpg");
+        const [cw, ch] = spec.coverSize.split("x").map((n) => parseInt(n, 10));
+        await sharp(coverSrc).resize(cw || 1080, ch || 1920, { fit: "cover" }).jpeg({ quality: 92 }).toFile(coverOut);
+      }
+
+      // 3) 标题/文案按平台参数小改写（同源改写，不重新创作）
+      let copyData: { title?: string; caption?: string; tags?: string[] } = {};
+      if (step.provider_id) {
+        try {
+          const provider = this.registry.get(step.provider_id);
+          const prompt = renderTemplate(this.templates.readPrompt("adapt-copy.md"), {
+            ...this.buildVars(step),
+            platform: spec,
+          });
+          const release = await this.registry.semaphore(provider.row).acquire();
+          let result: GenerateResult;
+          try {
+            result = await provider.generate({
+              taskId: `${step.id}-${spec.id}`,
+              stepType: "adapt",
+              prompt,
+              timeoutMs: STEP_TIMEOUT_MS,
+            });
+          } finally {
+            release();
+          }
+          if (result.kind === "text") copyData = extractJson<typeof copyData>(result.text) ?? {};
+        } catch {
+          // 改写失败回落母版标题/口播稿，不阻断发布包
+        }
+      }
+      const pTitle = String(copyData.title || title).slice(0, spec.titleMaxLen);
+      const tags = (copyData.tags ?? []).slice(0, spec.tagCount?.[1] ?? 5).map((t) => `#${String(t).replace(/^#/, "")}`);
+      const caption = [String(copyData.caption || script.slice(0, 120)), tags.join(" ")].filter(Boolean).join("\n\n");
+      fs.writeFileSync(path.join(pkgDir, "title.txt"), pTitle, "utf-8");
+      fs.writeFileSync(path.join(pkgDir, "caption.txt"), caption, "utf-8");
+      fs.writeFileSync(
+        path.join(pkgDir, "checklist.md"),
+        `# ${spec.name} 发布注意事项\n\n${spec.checklist.map((c) => `- [ ] ${c}`).join("\n")}\n`,
+        "utf-8"
+      );
+
+      const pkg = this.repo.upsertPackage({
+        topicId,
+        platform: spec.id,
+        videoPath: videoOut,
+        title: pTitle,
+        caption,
+        coverPaths: coverOut ? [coverOut] : [],
+        checklist: spec.checklist,
+      });
+      this.emitEvent({ type: "package", topicId, data: pkg });
+
+      for (const artifact of [
+        this.repo.createArtifact({
+          stepId: step.id,
+          version,
+          kind: "video" as const,
+          role: "package-video",
+          filePath: videoOut,
+          label: `【${spec.name}】成片 ${spec.aspect}`,
+          meta: { platform: spec.id },
+        }),
+        coverOut
+          ? this.repo.createArtifact({
+              stepId: step.id,
+              version,
+              kind: "image" as const,
+              role: "package-cover",
+              filePath: coverOut,
+              label: `【${spec.name}】封面 ${spec.coverSize}`,
+              meta: { platform: spec.id },
+            })
+          : null,
+        this.repo.createArtifact({
+          stepId: step.id,
+          version,
+          kind: "text" as const,
+          role: "package-copy",
+          content: `【标题】${pTitle}\n\n【发布文案】\n${caption}\n\n【注意事项】\n${spec.checklist.map((c) => `- ${c}`).join("\n")}`,
+          label: `【${spec.name}】发布文案`,
+          meta: { platform: spec.id },
+        }),
+      ]) {
+        if (artifact) this.emitEvent({ type: "artifact", topicId, stepId: step.id, data: artifact });
+      }
+    }
+    this.adaptPlatforms.delete(topicId);
+    this.adaptRequested.delete(topicId);
   }
 }

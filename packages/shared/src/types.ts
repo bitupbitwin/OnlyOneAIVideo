@@ -3,6 +3,7 @@ export type StepId =
   | "title"
   | "script"
   | "storyboard"
+  | "cover"
   | "frames"
   | "video"
   | "tts"
@@ -103,7 +104,7 @@ export interface ProviderStatus {
 }
 
 export interface EngineEvent {
-  type: "topic-status" | "step-status" | "step-stream" | "artifact" | "review" | "compose-progress";
+  type: "topic-status" | "step-status" | "step-stream" | "artifact" | "review" | "compose-progress" | "package";
   topicId: number;
   stepId?: number;
   data: any;
@@ -129,6 +130,21 @@ export interface RuntimeScene {
 export interface RuntimeSceneGraph {
   scenes: RuntimeScene[];
   bgmMood?: string;
+  /** 封面出图提示词：分镜表 index0 生成初稿 copy 到此，用户可在封面模块手动润色后再出图 */
+  coverPrompt?: string;
+}
+
+export interface PlatformSpec {
+  id: string;
+  name: string;
+  /** 目标视频比例，如 "9:16" / "3:4" / "16:9" / "1:1" */
+  aspect: string;
+  /** 封面尺寸 "宽x高" */
+  coverSize: string;
+  titleMaxLen: number;
+  tagCount: [number, number];
+  voice: string;
+  checklist: string[];
 }
 
 export interface ReviewScore {

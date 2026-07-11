@@ -41,7 +41,7 @@ if (prompt.includes("JSON 数组") && prompt.includes("候选标题")) {
           suggestions: ["可在标题中加入更具体的数字增强可信度"],
         },
         {
-          target: "content",
+          target: "script",
           scores: { hook: forceRevise ? 5 : 7, platform_fit: 8, clarity: 8, compliance: 10, seo: 7 },
           total: forceRevise ? 66 : 80,
           verdict: forceRevise ? "revise" : "pass",
@@ -53,11 +53,30 @@ if (prompt.includes("JSON 数组") && prompt.includes("候选标题")) {
       2
     )
   );
+} else if (prompt.includes("平台文案派生") || (prompt.includes("titleMaxLen") && prompt.includes("平台"))) {
+  console.log(
+    JSON.stringify(
+      {
+        title: `${topic}三步搞定`.slice(0, 20),
+        caption: `一条视频讲清楚${topic}的核心方法，照着做就能出第一条成片。`,
+        tags: [topic.slice(0, 8), "干货分享", "教程"],
+      },
+      null,
+      2
+    )
+  );
 } else if (prompt.includes("V2 分镜表") || prompt.includes("分镜表")) {
   console.log(
     JSON.stringify(
       {
         scenes: [
+          {
+            index: 0,
+            narration: "",
+            subtitle: "",
+            source: "generated",
+            visual: `短视频封面：主题「${topic}」，1080x1920 竖版，主体居中构图醒目，高对比配色，预留大标题文字位置，现代扁平风`
+          },
           {
             index: 1,
             narration: `你还在为${topic}发愁吗？`,

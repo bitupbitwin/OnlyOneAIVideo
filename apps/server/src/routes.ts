@@ -317,12 +317,50 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     return reply.send(fs.createReadStream(resolved));
   });
 
-  app.post<{ Params: { id: string }; Body: { platforms: string[] } }>("/api/topics/:id/adapt", async (_req, reply) => {
-    return reply.code(501).send({ error: "M5 平台派生尚未实现" });
+  app.get("/api/platforms", async () => templates.listPlatforms());
+
+  app.post<{ Params: { id: string }; Body: { platforms: string[] } }>("/api/topics/:id/adapt", async (req, reply) => {
+    const topic = repo.getTopic(Number(req.params.id));
+    if (!topic) return reply.code(404).send({ error: "选题不存在" });
+    try {
+      engine.requestAdapt(topic.id, req.body?.platforms ?? []);
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
   });
 
-  app.get<{ Params: { id: string } }>("/api/topics/:id/export", async (_req, reply) => {
-    return reply.code(501).send({ error: "M5 发布包 ZIP 尚未实现" });
+  app.get<{ Params: { id: string } }>("/api/topics/:id/export", async (req, reply) => {
+    const topic = repo.getTopic(Number(req.params.id));
+    if (!topic) return reply.code(404).send({ error: "选题不存在" });
+    const pkgRoot = path.join(ctx.workspaceDir, `topic-${topic.id}`, "packages");
+    if (!fs.existsSync(pkgRoot) || fs.readdirSync(pkgRoot).length === 0) {
+      return reply.code(400).send({ error: "还没有发布包，请先在「平台派生」勾选平台生成" });
+    }
+    const { default: archiver } = await import("archiver");
+    reply.header("Content-Type", "application/zip");
+    reply.header("Content-Disposition", `attachment; filename="topic-${topic.id}-packages.zip"`);
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    archive.directory(pkgRoot, false);
+    void archive.finalize();
+    return reply.send(archive as any);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/topics/:id/cover-prompt", async (req, reply) => {
+    const topic = repo.getTopic(Number(req.params.id));
+    if (!topic) return reply.code(404).send({ error: "选题不存在" });
+    return { prompt: engine.getCoverPrompt(topic.id) };
+  });
+
+  app.put<{ Params: { id: string }; Body: { prompt: string } }>("/api/topics/:id/cover-prompt", async (req, reply) => {
+    const topic = repo.getTopic(Number(req.params.id));
+    if (!topic) return reply.code(404).send({ error: "选题不存在" });
+    try {
+      engine.setCoverPrompt(topic.id, req.body?.prompt ?? "");
+      return { ok: true, prompt: engine.getCoverPrompt(topic.id) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
   });
 
   app.get("/api/providers", async () => repo.listProviders());

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PipelineTemplate } from "@amp/shared";
+import type { PipelineTemplate, PlatformSpec } from "@amp/shared";
 import type { Repo } from "./db.js";
 
 export class TemplateStore {
@@ -11,6 +11,14 @@ export class TemplateStore {
 
   get promptsDir() {
     return path.join(this.rootDir, "prompts");
+  }
+
+  /** 平台参数表：platforms/platforms.json，每个平台一段，改参数不改代码 */
+  listPlatforms(): PlatformSpec[] {
+    const file = path.join(this.rootDir, "platforms", "platforms.json");
+    if (!fs.existsSync(file)) return [];
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, Omit<PlatformSpec, "id">>;
+    return Object.entries(raw).map(([id, spec]) => ({ id, ...spec }));
   }
 
   listPipelineTemplates(): PipelineTemplate[] {
