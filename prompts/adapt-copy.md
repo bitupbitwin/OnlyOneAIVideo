@@ -12,7 +12,7 @@
 ## 目标平台参数
 
 - 平台：{{platform.name}}
-- 标题字数上限（硬限制）：{{platform.titleMaxLen}} 字
+- 项目采用的标题发布安全上限：{{platform.titleMaxLen}} 字（发布前仍以平台当前界面为准）
 - 话题标签数量：{{platform.tagCount}} 个
 - 平台口吻：{{platform.voice}}
 

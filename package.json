@@ -9,7 +9,8 @@
     "dev": "concurrently -k -n server,web \"pnpm --filter @amp/server dev\" \"pnpm --filter @amp/web dev\"",
     "build": "pnpm --filter @amp/web build",
     "start": "pnpm --filter @amp/server start",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "test": "node --import tsx --test apps/server/src/routes.test.ts packages/core/src/engine.test.ts"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

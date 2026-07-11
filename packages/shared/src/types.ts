@@ -14,6 +14,16 @@ export type StepId =
 export type SourceType = "text" | "image" | "footage";
 export type SceneSource = "generated" | "footage";
 export type ProviderKind = "cli" | "api-text" | "api-image" | "api-video" | "tts";
+export type ProviderCapability =
+  | "text-generation"
+  | "image-understanding"
+  | "video-understanding"
+  | "image-generation"
+  | "image-editing"
+  | "text-to-video"
+  | "image-to-video"
+  | "video-editing"
+  | "tts";
 
 export type StepStatus =
   | "pending"
@@ -34,6 +44,9 @@ export interface Brief {
   requirements?: string;
   extra?: string;
   mediaMode?: "image-tts" | "image-video" | "text-video";
+  aspectRatio?: "16:9" | "9:16" | "1:1" | "3:4" | "4:3";
+  resolution?: "540p" | "720p" | "1080p" | "1K" | "2K" | "4K";
+  videoDurationSec?: 5 | 10 | 15;
 }
 
 export type MaterialKind = "text" | "image" | "video" | "file";
@@ -56,6 +69,9 @@ export interface ProviderRow {
   config: Record<string, any>;
   maxConcurrency: number;
   enabled: boolean;
+  capabilities: ProviderCapability[];
+  /** 是否能向流水线返回可继续使用的真实文件，而非仅文字说明或 Mock 占位文件。 */
+  realFileOutput: boolean;
 }
 
 export type StepType = StepId | "content" | "cover" | "video" | "image-prompts" | "image-to-video";
@@ -67,9 +83,12 @@ export interface GenerateRequest {
   timeoutMs: number;
   outDir?: string;
   images?: string[];
+  videos?: string[];
   overlayText?: string;
   imageCount?: number;
   imageSize?: string;
+  aspectRatio?: string;
+  resolution?: string;
   durationSec?: number;
   voice?: string;
   speed?: number;

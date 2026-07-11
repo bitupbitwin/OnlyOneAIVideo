@@ -33,7 +33,7 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     humanGate: true,
     requiresProvider: true,
     providerKinds: ["api-text", "cli"],
-    defaultProviderId: "api-grok-vision",
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   title: {
@@ -43,7 +43,7 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     humanGate: true,
     requiresProvider: true,
     providerKinds: ["cli", "api-text"],
-    defaultProviderId: "cli-mock",
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   script: {
@@ -53,7 +53,7 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     humanGate: false,
     requiresProvider: true,
     providerKinds: ["cli", "api-text"],
-    defaultProviderId: "cli-mock",
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   storyboard: {
@@ -63,7 +63,7 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     humanGate: false,
     requiresProvider: true,
     providerKinds: ["cli", "api-text"],
-    defaultProviderId: "cli-mock",
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   cover: {
@@ -73,8 +73,8 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     prompt: null,
     humanGate: false,
     requiresProvider: true,
-    providerKinds: ["api-image"],
-    defaultProviderId: "img-mock",
+    providerKinds: ["cli", "api-image"],
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   frames: {
@@ -83,8 +83,8 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     prompt: null,
     humanGate: false,
     requiresProvider: true,
-    providerKinds: ["api-image"],
-    defaultProviderId: "img-mock",
+    providerKinds: ["cli", "api-image"],
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   video: {
@@ -93,8 +93,8 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     prompt: null,
     humanGate: false,
     requiresProvider: true,
-    providerKinds: ["api-video"],
-    defaultProviderId: "video-mock",
+    providerKinds: ["cli", "api-video"],
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   tts: {
@@ -124,7 +124,7 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     humanGate: false,
     requiresProvider: true,
     providerKinds: ["api-text", "cli"],
-    defaultProviderId: "cli-mock",
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: true,
   },
   adapt: {
@@ -134,7 +134,7 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     humanGate: false,
     requiresProvider: true,
     providerKinds: ["api-text", "cli"],
-    defaultProviderId: "cli-mock",
+    defaultProviderId: "cli-grok",
     requiredForTopicSuccess: false,
   },
 };

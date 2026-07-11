@@ -76,6 +76,29 @@ export function TopicWorkbench() {
     }
   };
 
+  const executeStep = async (step: any, rerun = false) => {
+    if (step.step_id === "cover") {
+      if (!coverPrompt.trim()) throw new Error("请先填写封面提示词");
+      await api.put(`/api/topics/${id}/cover-prompt`, { prompt: coverPrompt });
+      coverPromptDirty.current = false;
+    }
+    return api.post(`/api/steps/${step.id}/${rerun ? "rerun" : "run"}`);
+  };
+
+  const updateProductionSettings = async (patch: Record<string, any>) => {
+    const previous = topic;
+    const nextBrief = { ...topic.brief, ...patch };
+    setTopic({ ...topic, brief: nextBrief });
+    setError("");
+    try {
+      const updated = await api.put<any>(`/api/topics/${id}/brief`, { brief: nextBrief });
+      setTopic(updated);
+    } catch (e: any) {
+      setTopic(previous);
+      setError(`制作参数保存失败：${e.message}`);
+    }
+  };
+
   if (!topic) return <div className="page">{error || "加载中..."}</div>;
 
   const materials = topic.materials ?? [];
@@ -100,7 +123,7 @@ export function TopicWorkbench() {
           </button>
         </div>
       </div>
-      {busy && <div className="muted">正在处理...</div>}
+      {busy && <div className="busy-toast">正在处理...</div>}
       {error && <div className="error-text">{error}</div>}
 
       {requiredKind && (
@@ -153,21 +176,50 @@ export function TopicWorkbench() {
         <h3>主线步骤</h3>
         <div className="steps">
           {topic.steps.map((s: any, stepIndex: number) => {
-            const previousDone = topic.steps
-              .slice(0, stepIndex)
-              .every((previous: any) => previous.status === "succeeded" || previous.status === "skipped");
+            const isDone = (step: any) => step?.status === "succeeded" || step?.status === "skipped";
+            const previousDone =
+              s.step_id === "review"
+                ? isDone(topic.steps.find((step: any) => step.step_id === "title")) &&
+                  isDone(topic.steps.find((step: any) => step.step_id === "script"))
+                : topic.steps.slice(0, stepIndex).every(isDone);
             const canRunStep = s.status === "pending" && previousDone && s.step_id !== "adapt";
             return (
             <div className="step-card" key={s.id}>
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <strong>{s.name}</strong>
-                {canRunStep ? (
-                  <button className="small" onClick={() => act(() => api.post(`/api/steps/${s.id}/run`), `run-${s.step_id}`)}>
-                    运行
-                  </button>
-                ) : (
-                  <span className={`badge ${s.status}`}>{STATUS_LABEL[s.status] ?? s.status}</span>
-                )}
+                <div className="step-header-controls">
+                  {s.step_id === "storyboard" && (
+                    <>
+                      <label className="inline-setting">
+                        比例
+                        <select value={topic.brief?.aspectRatio ?? "9:16"} onChange={(e) => updateProductionSettings({ aspectRatio: e.target.value })}>
+                          {ASPECT_RATIOS.map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </label>
+                      <label className="inline-setting">
+                        分辨率
+                        <select value={topic.brief?.resolution ?? "1080p"} onChange={(e) => updateProductionSettings({ resolution: e.target.value })}>
+                          {RESOLUTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </label>
+                    </>
+                  )}
+                  {s.step_id === "video" && (
+                    <label className="inline-setting">
+                      单镜时长
+                      <select value={topic.brief?.videoDurationSec ?? 5} onChange={(e) => updateProductionSettings({ videoDurationSec: Number(e.target.value) })}>
+                        {[5, 10, 15].map((value) => <option key={value} value={value}>{value} 秒</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {canRunStep ? (
+                    <button className="small" onClick={() => act(() => executeStep(s), `run-${s.step_id}`)}>
+                      运行
+                    </button>
+                  ) : (
+                    <span className={`badge ${s.status}`}>{STATUS_LABEL[s.status] ?? s.status}</span>
+                  )}
+                </div>
               </div>
               <p className="muted">
                 {s.step_id}
@@ -206,7 +258,7 @@ export function TopicWorkbench() {
                   ))}
                 </select>
                 {s.step_id !== "adapt" && (
-                  <button className="ghost small" onClick={() => act(() => api.post(`/api/steps/${s.id}/rerun`), "rerun")}>
+                  <button className="ghost small" onClick={() => act(() => executeStep(s, true), "rerun")}>
                     重跑
                   </button>
                 )}
@@ -260,9 +312,9 @@ export function TopicWorkbench() {
               {s.step_id === "adapt" && (
                 <div className="adapt-panel" style={{ marginTop: 8 }}>
                   <div className="muted" style={{ marginBottom: 4 }}>选择要分发的平台（同一条母版派生，不重新生成内容）：</div>
-                  <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                  <div className="platform-options">
                     {platforms.map((p) => (
-                      <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <label key={p.id} className="platform-option">
                         <input
                           type="checkbox"
                           checked={chosenPlatforms.includes(p.id)}
@@ -299,7 +351,10 @@ export function TopicWorkbench() {
                   onSelect={(artifactId) => act(() => api.post(`/api/artifacts/${artifactId}/select`), "select")}
                 />
               )}
-              {(s.artifacts ?? []).length > 0 && s.step_id !== "title" && s.step_id !== "review" && (
+              {(s.artifacts ?? []).length > 0 && s.step_id === "adapt" && (
+                <AdaptArtifacts artifacts={s.artifacts} platforms={platforms} />
+              )}
+              {(s.artifacts ?? []).length > 0 && s.step_id !== "title" && s.step_id !== "review" && s.step_id !== "adapt" && (
                 <div className={`artifacts ${["cover", "frames", "video", "tts", "compose", "adapt"].includes(s.step_id) ? "artifacts-grid" : ""}`}>
                   {s.artifacts.map((a: any) => (
                     <div className={`artifact ${["cover", "frames", "video", "tts", "compose", "adapt"].includes(s.step_id) ? "artifact-media" : ""}`} key={a.id}>
@@ -348,6 +403,49 @@ export function TopicWorkbench() {
   );
 }
 
+function AdaptArtifacts({ artifacts, platforms }: { artifacts: any[]; platforms: any[] }) {
+  const platformName = new Map(platforms.map((platform) => [platform.id, platform.name]));
+  const groups = new Map<string, any[]>();
+  for (const artifact of artifacts) {
+    const platform = String(artifact.meta?.platform ?? "other");
+    if (!groups.has(platform)) groups.set(platform, []);
+    groups.get(platform)!.push(artifact);
+  }
+  const roleOrder: Record<string, number> = { "package-cover": 1, "package-video": 2, "package-copy": 3 };
+  return (
+    <div className="adapt-artifacts">
+      {[...groups.entries()].map(([platform, items]) => (
+        <section className="adapt-platform-group" key={platform}>
+          <div className="adapt-platform-title">{platformName.get(platform) ?? platform}发布包</div>
+          <div className="adapt-platform-row">
+            {[...items]
+              .sort((a, b) => (roleOrder[a.role] ?? 99) - (roleOrder[b.role] ?? 99))
+              .map((artifact) => (
+                <ArtifactCard artifact={artifact} key={artifact.id} />
+              ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ArtifactCard({ artifact }: { artifact: any }) {
+  return (
+    <div className="artifact artifact-media">
+      <div className="artifact-label">{artifact.label ?? artifact.role ?? artifact.kind}</div>
+      {artifact.content && <pre>{artifact.content}</pre>}
+      {artifact.kind === "video" && artifact.file_path && (
+        <video className="artifact-video" controls preload="metadata" src={`/api/artifacts/${artifact.id}/file`} />
+      )}
+      {artifact.kind === "image" && artifact.file_path && (
+        <img className="artifact-image" src={`/api/artifacts/${artifact.id}/file`} alt={artifact.label ?? ""} />
+      )}
+      {artifact.file_path && <a href={`/api/artifacts/${artifact.id}/file`}>打开文件</a>}
+    </div>
+  );
+}
+
 function TitleCandidates({ artifacts, onSelect }: { artifacts: any[]; onSelect: (artifactId: number) => void }) {
   const latestVersion = Math.max(...artifacts.map((artifact) => artifact.version));
   const candidates = artifacts.filter((artifact) => artifact.version === latestVersion).slice(0, 3);
@@ -370,12 +468,19 @@ function mediaModeLabel(mode?: string) {
   return "图片 + 独立配音 → 合成";
 }
 
+const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "3:4", "4:3"];
+const RESOLUTIONS = ["540p", "720p", "1080p", "1K", "2K", "4K"];
+
 function providerMatchesStep(provider: any, stepId: string) {
-  if (stepId === "cover" || stepId === "frames") return provider.kind === "api-image";
-  if (stepId === "video") return provider.kind === "api-video";
-  if (stepId === "tts") return provider.kind === "tts";
+  const capabilities: string[] = provider.capabilities ?? [];
+  const has = (...required: string[]) => required.some((capability) => capabilities.includes(capability));
+  const canReturnMedia = provider.realFileOutput || provider.config?.mock;
+  if (stepId === "cover" || stepId === "frames") return has("image-generation") && canReturnMedia;
+  if (stepId === "video") return has("text-to-video", "image-to-video") && canReturnMedia;
+  if (stepId === "tts") return has("tts");
   if (stepId === "compose") return false;
-  return provider.kind === "cli" || provider.kind === "api-text";
+  if (stepId === "analyze") return has("text-generation") && has("image-understanding", "video-understanding");
+  return has("text-generation");
 }
 
 /** 评审报告：只报告不自动重跑；不合格时提供「按建议重跑」按钮由用户决定 */

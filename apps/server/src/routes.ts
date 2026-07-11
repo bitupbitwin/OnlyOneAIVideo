@@ -1,8 +1,12 @@
 import fs from "node:fs";
+import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import path from "node:path";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import type { FastifyInstance } from "fastify";
-import { MAINLINE_STEP_DEFS, type PipelineEngine, type ProviderRegistry, type Repo, type TemplateStore } from "@amp/core";
+import { MAINLINE_STEP_DEFS, providerSupportsStep, type PipelineEngine, type ProviderRegistry, type Repo, type TemplateStore } from "@amp/core";
 import type { Brief, EngineEvent, ProviderRow, SourceType } from "@amp/shared";
 import { ensureAnalysisImage, ensureImageThumbnail } from "@amp/providers";
 
@@ -44,17 +48,28 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
 
   app.get("/api/topics", async () => repo.listTopics());
 
-  app.post<{ Body: { title: string; sourceType?: SourceType; brief?: Brief; auto?: boolean } }>(
+  app.post<{ Body: { title: string; sourceType?: SourceType; brief?: Brief; auto?: boolean; material?: { content: string; note?: string } } }>(
     "/api/topics",
+    { bodyLimit: 2 * 1024 * 1024 },
     async (req, reply) => {
       const title = req.body?.title?.trim();
       if (!title) return reply.code(400).send({ error: "title 必填" });
       const sourceType = req.body.sourceType ?? "text";
       if (!["text", "image", "footage"].includes(sourceType)) return reply.code(400).send({ error: "sourceType 不合法" });
       const brief = { topic: title, ...(req.body.brief ?? {}) };
+      const materialContent = req.body.material?.content?.trim() ?? "";
+      if (materialContent.length > 300_000) return reply.code(413).send({ error: "文字素材最多 30 万字，请拆分或精简后再导入" });
       const topic = repo.createTopic({ title, sourceType, brief, auto: !!req.body.auto });
-      engine.bootstrapSteps(topic.id);
-      return getTopicDetail(repo, topic.id);
+      try {
+        if (materialContent) {
+          repo.createMaterial({ topicId: topic.id, kind: "text", content: materialContent, note: req.body.material?.note });
+        }
+        engine.bootstrapSteps(topic.id);
+        return getTopicDetail(repo, topic.id);
+      } catch (error) {
+        repo.deleteTopic(topic.id);
+        throw error;
+      }
     }
   );
 
@@ -124,12 +139,22 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
 
   app.get<{ Params: { id: string } }>("/api/topics/:id/materials", async (req) => repo.listMaterials(Number(req.params.id)));
 
+  app.post<{ Body: { url: string } }>("/api/materials/fetch-url", async (req, reply) => {
+    try {
+      return await fetchWebMaterial(req.body?.url);
+    } catch (error: any) {
+      return reply.code(400).send({ error: error?.message ?? String(error) });
+    }
+  });
+
   app.post<{ Params: { id: string }; Body: { content: string; note?: string } }>(
     "/api/topics/:id/materials/text",
+    { bodyLimit: 2 * 1024 * 1024 },
     async (req, reply) => {
       const topic = repo.getTopic(Number(req.params.id));
       if (!topic) return reply.code(404).send({ error: "选题不存在" });
       if (!req.body?.content?.trim()) return reply.code(400).send({ error: "文字内容不能为空" });
+      if (req.body.content.trim().length > 300_000) return reply.code(413).send({ error: "文字素材最多 30 万字" });
       return repo.createMaterial({ topicId: topic.id, kind: "text", content: req.body.content, note: req.body.note });
     }
   );
@@ -237,9 +262,13 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     if (!step) return reply.code(404).send({ error: "步骤不存在" });
     const provider = repo.getProvider(req.body.providerId);
     if (!provider) return reply.code(400).send({ error: "引擎不存在" });
+    if (!provider.enabled) return reply.code(400).send({ error: `引擎“${provider.name}”当前未启用` });
     const allowedKinds = MAINLINE_STEP_DEFS[step.step_id].providerKinds;
     if (!allowedKinds.includes(provider.kind)) {
       return reply.code(400).send({ error: `该模块不支持“${provider.name}”；请选择 ${allowedKinds.join(" / ")} 类型引擎` });
+    }
+    if (!providerSupportsStep(provider, step.step_id)) {
+      return reply.code(400).send({ error: `引擎“${provider.name}”缺少该模块所需的能力标签或真实文件输出能力` });
     }
     repo.setStepProvider(step.id, req.body.providerId);
     return repo.getStep(step.id);
@@ -415,4 +444,174 @@ function getTopicDetail(repo: Repo, id: number) {
   if (!topic) return undefined;
   const steps = repo.listStepsByTopic(id).map((s) => ({ ...s, artifacts: repo.listArtifactsByStep(s.id) }));
   return { ...topic, steps, materials: repo.listMaterials(id), packages: repo.listPackages(id) };
+}
+
+async function fetchWebMaterial(input: string | undefined) {
+  if (!input?.trim()) throw new Error("网页地址不能为空");
+  const normalized = /^[a-z][a-z\d+.-]*:\/\//i.test(input.trim()) ? input.trim() : `https://${input.trim()}`;
+  let current = new URL(normalized);
+  for (let redirectCount = 0; redirectCount <= 5; redirectCount++) {
+    const response = await fetchPublicPage(current);
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.location;
+      if (!location) throw new Error(`网页重定向缺少地址（HTTP ${response.status}）`);
+      current = new URL(location, current);
+      continue;
+    }
+    if (response.status < 200 || response.status >= 300) throw new Error(`网页返回 HTTP ${response.status}`);
+    const contentType = response.contentType;
+    if (!/text\/html|application\/xhtml\+xml|text\/plain/i.test(contentType)) {
+      throw new Error("该地址不是可读取的网页正文");
+    }
+    const html = decodeWebBody(response.body, contentType);
+    const article = extractWebArticle(html);
+    if (!article.content) throw new Error("未从网页中提取到正文");
+    return { ...article, url: current.toString() };
+  }
+  throw new Error("网页重定向次数过多");
+}
+
+async function resolvePublicAddress(url: URL): Promise<{ address: string; family: 4 | 6 }> {
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("只支持 HTTP 或 HTTPS 网页地址");
+  if (url.username || url.password) throw new Error("网页地址不能包含账号或密码");
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
+    throw new Error("禁止访问本机或内网地址");
+  }
+  const addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+  // 混合解析结果也拒绝，防止域名在公网和内网地址之间切换。
+  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
+    throw new Error("禁止访问本机或内网地址");
+  }
+  const selected = addresses[0];
+  return { address: selected.address, family: selected.family as 4 | 6 };
+}
+
+/** 使用已经校验的 IP 发起请求，避免校验后由底层再次 DNS 解析造成重绑定。 */
+async function fetchPublicPage(url: URL): Promise<{ status: number; location: string; contentType: string; body: Uint8Array }> {
+  const pinned = await resolvePublicAddress(url);
+  const transport = url.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request(url, {
+      method: "GET",
+      headers: {
+        Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
+        "User-Agent": "Mozilla/5.0 OnlyOneAIVideo/1.0",
+      },
+      lookup: ((_hostname: string, _options: unknown, callback: (error: Error | null, address: string, family: number) => void) => {
+        callback(null, pinned.address, pinned.family);
+      }) as any,
+      ...(url.protocol === "https:" ? { servername: url.hostname } : {}),
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      let total = 0;
+      response.on("data", (chunk: Buffer) => {
+        total += chunk.length;
+        if (total > 5 * 1024 * 1024) {
+          request.destroy(new Error("网页正文超过 5 MB，无法导入"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => resolve({
+        status: response.statusCode ?? 0,
+        location: String(response.headers.location ?? ""),
+        contentType: String(response.headers["content-type"] ?? ""),
+        body: new Uint8Array(Buffer.concat(chunks)),
+      }));
+    });
+    request.setTimeout(20_000, () => request.destroy(new Error("网页抓取超时（20秒）")));
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+export function isPrivateAddress(address: string): boolean {
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number);
+    return a === 0
+      || a === 10
+      || a === 127
+      || (a === 100 && b >= 64 && b <= 127)
+      || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || a >= 224;
+  }
+  if (net.isIPv6(address)) {
+    const normalized = address.toLowerCase();
+    const mapped = normalized.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+    return normalized === "::"
+      || normalized === "::1"
+      || normalized.startsWith("fc")
+      || normalized.startsWith("fd")
+      || normalized.startsWith("fe8")
+      || normalized.startsWith("fe9")
+      || normalized.startsWith("fea")
+      || normalized.startsWith("feb")
+      || !!(mapped && isPrivateAddress(mapped));
+  }
+  return true;
+}
+
+function decodeWebBody(bytes: Uint8Array, contentType: string): string {
+  const initial = new TextDecoder("utf-8").decode(bytes.slice(0, 4096));
+  const charset = contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/i)?.[1]
+    ?? initial.match(/<meta[^>]+charset\s*=\s*["']?([^"'\s/>]+)/i)?.[1]
+    ?? initial.match(/<meta[^>]+content=["'][^"']*charset=([^"'\s;]+)/i)?.[1]
+    ?? "utf-8";
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
+export function extractWebArticle(html: string): { title: string; content: string } {
+  const title = decodeHtml(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const cleaned = html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<(script|style|noscript|svg|canvas|iframe|nav|footer|header|aside)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+  const articleCandidates = Array.from(cleaned.matchAll(/<article\b[^>]*>([\s\S]*?)<\/article>/gi), (match) => htmlFragmentToText(match[1]))
+    .filter((candidate) => candidate.length >= 200);
+  const mainCandidates = Array.from(cleaned.matchAll(/<main\b[^>]*>([\s\S]*?)<\/main>/gi), (match) => htmlFragmentToText(match[1]))
+    .filter((candidate) => candidate.length >= 200);
+  const body = htmlFragmentToText(cleaned.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? cleaned);
+  // 语义容器优先；同级多个候选时再选择内容最完整的一个。
+  const candidates = articleCandidates.length > 0 ? articleCandidates : mainCandidates.length > 0 ? mainCandidates : [body];
+  const content = candidates.sort((left, right) => right.length - left.length)[0] ?? "";
+  return { title, content: content.slice(0, 500_000) };
+}
+
+function htmlFragmentToText(html: string): string {
+  return decodeHtml(
+    html
+      .replace(/<(br|hr)\b[^>]*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|main|h[1-6]|li|blockquote|pre|tr)>/gi, "\n")
+      .replace(/<li\b[^>]*>/gi, "• ")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function decodeHtml(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: "\"",
+    apos: "'",
+    nbsp: " ",
+  };
+  return value.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (entity, code: string) => {
+    if (code[0] !== "#") return named[code.toLowerCase()] ?? entity;
+    const value = code[1].toLowerCase() === "x" ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10);
+    return Number.isFinite(value) ? String.fromCodePoint(value) : entity;
+  });
 }

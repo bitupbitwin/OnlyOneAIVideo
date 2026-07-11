@@ -6,6 +6,7 @@ export function Prompts() {
   const [current, setCurrent] = useState<string>("");
   const [content, setContent] = useState("");
   const [message, setMessage] = useState("");
+  const [category, setCategory] = useState("all");
 
   const load = () => api.get<any[]>("/api/prompts").then(setList).catch((e) => setMessage(e.message));
   useEffect(() => {
@@ -32,15 +33,34 @@ export function Prompts() {
     load();
   };
 
+  const filtered = list.filter((item) => category === "all" || promptCategory(item.path) === category);
+
+  const chooseCategory = (value: string) => {
+    setCategory(value);
+    if (current && value !== "all" && promptCategory(current) !== value) {
+      setCurrent("");
+      setContent("");
+    }
+  };
+
   return (
     <div className="page">
-      <h2>Prompt 模板管理</h2>
+      <h2>平台模板管理</h2>
       <p className="muted" style={{ margin: "6px 0 14px" }}>
-        模板按「平台/模式/步骤」组织。修改后立即生效；标⭐的表示已被你覆盖，可随时恢复默认。
+        模板按「平台/模式/步骤」组织。先选择平台快速定位；修改后立即生效，标⭐表示已被覆盖。
       </p>
+      <div className="prompt-category-bar card">
+        <label className="inline-setting">
+          平台分类
+          <select value={category} onChange={(event) => chooseCategory(event.target.value)}>
+            {PROMPT_CATEGORIES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+          </select>
+        </label>
+        <span className="muted">当前显示 {filtered.length} 个模板</span>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
         <div className="card" style={{ maxHeight: "70vh", overflow: "auto" }}>
-          {list.map((p) => (
+          {filtered.map((p) => (
             <div
               key={p.path}
               onClick={() => open(p.path)}
@@ -78,4 +98,21 @@ export function Prompts() {
       </div>
     </div>
   );
+}
+
+const PROMPT_CATEGORIES = [
+  { id: "all", label: "全部平台" },
+  { id: "common", label: "通用基础模板" },
+  { id: "douyin", label: "抖音" },
+  { id: "bilibili", label: "哔哩哔哩" },
+  { id: "xiaohongshu", label: "小红书" },
+  { id: "wechat-channels", label: "微信视频号" },
+  { id: "wechat-mp", label: "微信公众号" },
+  { id: "csdn", label: "CSDN" },
+  { id: "mv", label: "MV" },
+];
+
+function promptCategory(path: string): string {
+  const first = path.split("/")[0];
+  return PROMPT_CATEGORIES.some((item) => item.id === first) ? first : "common";
 }

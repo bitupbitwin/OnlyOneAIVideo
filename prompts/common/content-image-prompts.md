@@ -17,7 +17,7 @@
 1. 提示词全部用英文；信息图/海报风格（clean infographic / poster design, flat design, bold typography area）。
 2. 每张图为「大号中文主文案」预留清晰版面（a clear area for a large bold Chinese headline），并写明该图的中文主文案。
 3. 统一视觉：一致的配色/版式/留白；现代、干净、手机端可读。
-4. 如出现人物，设计为中国人。画质 ultra high definition, masterpiece。
+4. 人物地域与外观服从主题和用户要求；未指定且内容明确为中国语境时优先使用中国人物。按所选模型写必要的清晰度和风格描述，避免机械堆砌质量词。
 
 ## 输出格式（编号列出，每条之间空一行，不要额外解释）
 【图 1·首图】要点：「<这张图概括的要点>」

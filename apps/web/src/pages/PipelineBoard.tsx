@@ -47,8 +47,8 @@ export function PipelineBoard() {
 
   if (!data) return <div className="page">{error || "加载中…"}</div>;
 
-  const textProviders = providers.filter((p) => p.enabled && (p.kind === "cli" || p.kind === "api-text" || p.kind === "web"));
-  const imageProviders = providers.filter((p) => p.enabled && p.kind === "api-image");
+  const textProviders = providers.filter((p) => p.enabled && (p.capabilities ?? []).includes("text-generation"));
+  const imageProviders = providers.filter((p) => p.enabled && (p.capabilities ?? []).includes("image-generation"));
 
   return (
     <div className="page">

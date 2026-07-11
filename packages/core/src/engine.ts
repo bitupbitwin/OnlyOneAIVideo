@@ -14,11 +14,14 @@ import { composeMaster, deriveAspectVideo, probeDurationSec, type ComposeSceneIn
 const STEP_TIMEOUT_MS = 10 * 60 * 1000;
 /** 镜头间呼吸间隔（实现设计 §5.3 Hard-cut 模型） */
 const GAP_SEC = 0.3;
+/** 给模型的原始文字素材预算；数据库仍保存全文，避免超长素材直接撑爆 CLI/API 上下文。 */
+const MATERIAL_PROMPT_CHAR_BUDGET = 80_000;
 
 const CONTENT_RULES = [
   "只给真材实料：具体例子、步骤、数据、原理或亲身经验至少要出现一种。",
   "拒绝正确的废话、空洞口号、营销话术和堆砌形容词。",
   "基于用户提供的主题/素材展开，不编造与素材冲突的事实。",
+  "必须完整理解原始素材的上下文，再生成标题、口播稿和分镜；不得只截取局部内容造成断章取义。",
 ].join("\n");
 
 export class PipelineEngine extends EventEmitter {
@@ -82,17 +85,22 @@ export class PipelineEngine extends EventEmitter {
       if (step.status !== "pending") continue;
       if (stepId === "adapt" && !this.adaptRequested.has(topicId)) return;
 
-      this.inflight.add(step.id);
-      this.topicInflight.add(topicId);
-      void this.runStep(step.id).finally(() => {
-        this.inflight.delete(step.id);
-        this.topicInflight.delete(topicId);
-        this.refreshTopicStatus(topicId);
-        const latest = this.repo.getStep(step.id);
-        if (latest?.status === "succeeded" || latest?.status === "skipped") this.kick(topicId);
-      });
+      this.startStep(step);
       return;
     }
+  }
+
+  private startStep(step: StepRow) {
+    if (this.topicInflight.has(step.topic_id)) throw new Error("该选题已有模块正在运行，请稍候");
+    this.inflight.add(step.id);
+    this.topicInflight.add(step.topic_id);
+    void this.runStep(step.id).finally(() => {
+      this.inflight.delete(step.id);
+      this.topicInflight.delete(step.topic_id);
+      this.refreshTopicStatus(step.topic_id);
+      const latest = this.repo.getStep(step.id);
+      if (latest?.status === "succeeded" || latest?.status === "skipped") this.kick(step.topic_id);
+    });
   }
 
   rerunStep(stepId: number, feedback?: string) {
@@ -104,7 +112,7 @@ export class PipelineEngine extends EventEmitter {
     this.repo.resetStepsFrom(step.topic_id, step.step_id, MAINLINE);
     this.emitEvent({ type: "step-status", topicId: step.topic_id, stepId: step.id, data: { status: "pending" } });
     this.refreshTopicStatus(step.topic_id);
-    this.kick(step.topic_id, true);
+    this.runPendingStep(step.id);
   }
 
   runPendingStep(stepId: number) {
@@ -112,14 +120,19 @@ export class PipelineEngine extends EventEmitter {
     if (!step) throw new Error(`步骤 ${stepId} 不存在`);
     if (step.status !== "pending") throw new Error("只有待执行模块可以运行");
     const steps = this.repo.listStepsByTopic(step.topic_id);
-    const index = MAINLINE.indexOf(step.step_id);
-    const blocked = steps.some((candidate) => {
-      const candidateIndex = MAINLINE.indexOf(candidate.step_id);
-      return candidateIndex < index && candidate.status !== "succeeded" && candidate.status !== "skipped";
-    });
+    const done = (candidate: StepRow | undefined) =>
+      !!candidate && (candidate.status === "succeeded" || candidate.status === "skipped");
+    const blocked =
+      step.step_id === "review"
+        ? !done(steps.find((candidate) => candidate.step_id === "title")) ||
+          !done(steps.find((candidate) => candidate.step_id === "script"))
+        : steps.some((candidate) => {
+            const candidateIndex = MAINLINE.indexOf(candidate.step_id);
+            return candidateIndex < MAINLINE.indexOf(step.step_id) && !done(candidate);
+          });
     if (blocked) throw new Error("请先完成上一个模块");
     this.repo.setTopicAuto(step.topic_id, false);
-    this.kick(step.topic_id, true);
+    this.startStep(step);
   }
 
   confirmHumanGate(stepId: number) {
@@ -170,8 +183,13 @@ export class PipelineEngine extends EventEmitter {
   }
 
   private resolveProvider(def: StepDefMeta) {
-    const enabled = this.repo.listProviders().filter((p) => p.enabled && def.providerKinds.includes(p.kind));
-    return enabled.find((p) => !p.id.includes("mock")) ?? enabled[0] ?? null;
+    const enabled = this.repo
+      .listProviders()
+      .filter((provider) => provider.enabled && def.providerKinds.includes(provider.kind) && providerSupportsStep(provider, def.id));
+    return enabled.find((provider) => provider.id === def.defaultProviderId)
+      ?? enabled.find((provider) => !provider.id.includes("mock"))
+      ?? enabled[0]
+      ?? null;
   }
 
   private refreshTopicStatus(topicId: number) {
@@ -202,10 +220,17 @@ export class PipelineEngine extends EventEmitter {
         selectedPath: selected?.file_path ?? "",
       };
     }
-    const materials = this.repo
-      .listMaterials(topic.id)
+    const materialRows = this.repo.listMaterials(topic.id);
+    const textRows = materialRows.filter((material) => material.kind === "text" && material.content?.trim());
+    const perTextBudget = textRows.length > 0
+      ? Math.max(1, Math.floor(MATERIAL_PROMPT_CHAR_BUDGET / textRows.length))
+      : MATERIAL_PROMPT_CHAR_BUDGET;
+    const materials = materialRows
       .map((m) => {
-        if (m.kind === "text") return `【文字素材】${m.note ? `（${m.note}）` : ""}\n${m.content ?? ""}`;
+        if (m.kind === "text") {
+          const content = compactLongMaterial(m.content ?? "", perTextBudget);
+          return `【文字素材】${m.note ? `（${m.note}）` : ""}\n${content}`;
+        }
         return `【${m.kind}素材】${m.original_name ?? ""}${m.note ? ` - ${m.note}` : ""}`;
       })
       .join("\n\n");
@@ -225,6 +250,10 @@ export class PipelineEngine extends EventEmitter {
     if (req) prompt += `\n\n## 我的具体要求\n${req}`;
     if (step.step_id === "title" || step.step_id === "script" || step.step_id === "storyboard") {
       prompt += `\n\n## 创作铁律\n${CONTENT_RULES}`;
+    }
+    if (step.step_id === "storyboard") {
+      const brief = this.repo.getTopic(step.topic_id)!.brief;
+      prompt += `\n\n## 统一视觉规格\n- 所有封面和分镜画面比例：${brief.aspectRatio ?? "9:16"}\n- 目标分辨率：${brief.resolution ?? "1080p"}\n- 每条 visual 提示词都必须明确写入上述比例和分辨率。`;
     }
     if (feedback) prompt += `\n\n## 修改意见\n${feedback}`;
     return prompt;
@@ -326,6 +355,13 @@ export class PipelineEngine extends EventEmitter {
                     return fs.existsSync(analysisCopy) ? analysisCopy : material.file_path!;
                   })
               : undefined,
+          videos:
+            step.step_id === "analyze"
+              ? this.repo
+                  .listMaterials(step.topic_id)
+                  .filter((material) => material.kind === "video" && material.file_path)
+                  .map((material) => material.file_path!)
+              : undefined,
         },
         (chunk) => this.emitEvent({ type: "step-stream", topicId: step.topic_id, stepId: step.id, data: { chunk } })
       );
@@ -411,6 +447,9 @@ export class PipelineEngine extends EventEmitter {
     if (graph.scenes.length === 0) throw new Error("缺少 runtime/scenes.json，请先生成分镜表");
     if (!step.provider_id) throw new Error("frames 步骤未绑定出图引擎");
     const provider = this.registry.get(step.provider_id);
+    const brief = this.repo.getTopic(step.topic_id)!.brief;
+    const aspectRatio = brief.aspectRatio ?? "9:16";
+    const resolution = brief.resolution ?? "1080p";
     const version = this.repo.nextArtifactVersion(step.id);
     const outDir = this.stepDir(step, version);
     for (const scene of graph.scenes) {
@@ -420,11 +459,13 @@ export class PipelineEngine extends EventEmitter {
         const result = await provider.generate({
           taskId: `${step.id}-${scene.index}`,
           stepType: "frames",
-          prompt: scene.visual || scene.narration,
+          prompt: `${scene.visual || scene.narration}\n\n输出规格：${aspectRatio} 画幅，${resolution} 分辨率。`,
           timeoutMs: STEP_TIMEOUT_MS,
           outDir,
           imageCount: 1,
-          imageSize: "1080x1920",
+          imageSize: imagePixelSize(aspectRatio, resolution),
+          aspectRatio,
+          resolution,
         });
         if (result.kind !== "images" || !result.files[0]) throw new Error(`镜头 ${scene.index} 未生成图片`);
         scene.framePath = result.files[0];
@@ -454,6 +495,9 @@ export class PipelineEngine extends EventEmitter {
     if (!prompt) throw new Error("缺少封面提示词：请先生成分镜表，或在封面模块手动填写提示词后再运行");
     if (!step.provider_id) throw new Error("cover 步骤未绑定出图引擎");
     const provider = this.registry.get(step.provider_id);
+    const brief = this.repo.getTopic(step.topic_id)!.brief;
+    const aspectRatio = brief.aspectRatio ?? "9:16";
+    const resolution = brief.resolution ?? "1080p";
     const version = this.repo.nextArtifactVersion(step.id);
     const outDir = this.stepDir(step, version);
     const title = this.repo.selectedArtifact(this.repo.getStepByTopicAndStep(step.topic_id, "title")!.id)?.content ?? "";
@@ -464,24 +508,26 @@ export class PipelineEngine extends EventEmitter {
       const result = await provider.generate({
         taskId: String(step.id),
         stepType: "cover",
-        prompt,
+        prompt: `${prompt}\n\n输出规格：${aspectRatio} 画幅，${resolution} 分辨率。`,
         timeoutMs: STEP_TIMEOUT_MS,
         outDir,
-        imageCount: 3,
-        imageSize: "1080x1920",
+        imageCount: 1,
+        imageSize: imagePixelSize(aspectRatio, resolution),
+        aspectRatio,
+        resolution,
         overlayText: title, // 叠字类引擎（Grok底图+程序叠字）会把标题精确压到底图上；其他引擎忽略
       });
       if (result.kind !== "images" || result.files.length === 0) throw new Error("封面引擎未返回图片");
       const hadSelected = !!this.repo.selectedArtifact(step.id);
-      result.files.forEach((file, i) => {
+      result.files.slice(0, 1).forEach((file) => {
         const artifact = this.repo.createArtifact({
           stepId: step.id,
           version,
           kind: "image",
           role: "cover",
           filePath: file,
-          label: `封面候选 v${version}-${i + 1}`,
-          selected: !hadSelected && i === 0,
+          label: `封面候选 v${version}`,
+          selected: !hadSelected,
         });
         this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: artifact });
       });
@@ -544,6 +590,9 @@ export class PipelineEngine extends EventEmitter {
     if (!step.provider_id) throw new Error("video 步骤未绑定视频生成引擎");
     const topic = this.repo.getTopic(step.topic_id)!;
     const mode = topic.brief.mediaMode ?? "image-tts";
+    const aspectRatio = topic.brief.aspectRatio ?? "9:16";
+    const resolution = topic.brief.resolution ?? "1080p";
+    const videoDurationSec = topic.brief.videoDurationSec ?? 5;
     const provider = this.registry.get(step.provider_id);
     const version = this.repo.nextArtifactVersion(step.id);
     const outDir = this.stepDir(step, version);
@@ -556,7 +605,8 @@ export class PipelineEngine extends EventEmitter {
       const prompt = [
         scene.visual || scene.narration,
         `Narration/dialogue to include naturally in the generated clip: ${scene.narration}`,
-        "Vertical short-video shot, coherent motion, preserve character identity and appearance.",
+        `Output specification: ${aspectRatio} aspect ratio, ${resolution} resolution, ${videoDurationSec} seconds.`,
+        "Coherent motion, preserve character identity and appearance.",
       ].join("\n");
       const release = await this.registry.semaphore(provider.row).acquire();
       try {
@@ -567,8 +617,10 @@ export class PipelineEngine extends EventEmitter {
           timeoutMs: STEP_TIMEOUT_MS,
           outDir,
           images: inputImage ? [inputImage] : undefined,
-          imageSize: "9:16",
-          durationSec: 5,
+          imageSize: aspectRatio,
+          aspectRatio,
+          resolution,
+          durationSec: videoDurationSec,
         });
         if (result.kind !== "videos" || !result.files[0]) throw new Error(`镜头 ${scene.index} 未生成视频`);
         scene.videoPath = result.files[0];
@@ -924,4 +976,38 @@ export class PipelineEngine extends EventEmitter {
     this.adaptPlatforms.delete(topicId);
     this.adaptRequested.delete(topicId);
   }
+}
+
+/** 均匀保留开头、中部和结尾；明确标记省略，避免模型误以为拿到了全文。 */
+export function compactLongMaterial(content: string, budget = MATERIAL_PROMPT_CHAR_BUDGET): string {
+  const normalized = content.trim();
+  if (normalized.length <= budget) return normalized;
+  const marker = `\n\n【原文较长，中间部分已按上下文预算省略；全文共 ${normalized.length} 字，数据库中仍完整保留】\n\n`;
+  const available = Math.max(0, budget - marker.length * 2);
+  const headLength = Math.floor(available * 0.45);
+  const middleLength = Math.floor(available * 0.1);
+  const tailLength = available - headLength - middleLength;
+  const middleStart = Math.max(headLength, Math.floor((normalized.length - middleLength) / 2));
+  return `${normalized.slice(0, headLength)}${marker}${normalized.slice(middleStart, middleStart + middleLength)}${marker}${normalized.slice(-tailLength)}`;
+}
+
+function imagePixelSize(aspectRatio: string, resolution: string): string {
+  const base = ({ "540p": 540, "720p": 720, "1080p": 1080, "1K": 1024, "2K": 2048, "4K": 4096 } as Record<string, number>)[resolution] ?? 1080;
+  const [rw, rh] = aspectRatio.split(":").map(Number);
+  if (!rw || !rh) return `${base}x${base}`;
+  if (rw === rh) return `${base}x${base}`;
+  if (rw > rh) return `${Math.round(base * rw / rh)}x${base}`;
+  return `${base}x${Math.round(base * rh / rw)}`;
+}
+
+export function providerSupportsStep(provider: { capabilities: string[]; realFileOutput: boolean; config: Record<string, any> }, stepId: StepId): boolean {
+  const capabilities = provider.capabilities ?? [];
+  const has = (...required: string[]) => required.some((capability) => capabilities.includes(capability));
+  const canReturnMedia = provider.realFileOutput || provider.config?.mock;
+  if (stepId === "cover" || stepId === "frames") return has("image-generation") && canReturnMedia;
+  if (stepId === "video") return has("text-to-video", "image-to-video") && canReturnMedia;
+  if (stepId === "tts") return has("tts");
+  if (stepId === "compose") return false;
+  if (stepId === "analyze") return has("text-generation") && has("image-understanding", "video-understanding");
+  return has("text-generation");
 }

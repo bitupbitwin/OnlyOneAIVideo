@@ -56,7 +56,13 @@ export async function startServer(opts: ServerOptions = {}) {
   }
 
   const app = Fastify({ logger: { level: "info" } });
-  await app.register(cors, { origin: true });
+  await app.register(cors, {
+    origin(origin, callback) {
+      // CLI、桌面壳和同源请求可能没有 Origin；浏览器只允许本机工作台两个固定入口。
+      if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1):(5173|8787)$/.test(origin)) callback(null, true);
+      else callback(new Error("不允许的跨域来源"), false);
+    },
+  });
   await app.register(websocket);
   // 素材上传：单文件最大 2GB（容纳未剪辑视频原片）
   await app.register(multipart, { limits: { fileSize: 2 * 1024 * 1024 * 1024 } });

@@ -9,6 +9,18 @@ const KIND_LABEL: Record<string, string> = {
   tts: "TTS 配音",
 };
 
+const CAPABILITY_LABEL: Record<string, string> = {
+  "text-generation": "文本生成",
+  "image-understanding": "图片理解",
+  "video-understanding": "视频理解",
+  "image-generation": "图片生成",
+  "image-editing": "图片编辑",
+  "text-to-video": "文生视频",
+  "image-to-video": "图生视频",
+  "video-editing": "视频编辑",
+  tts: "TTS",
+};
+
 export function Providers() {
   const [providers, setProviders] = useState<any[]>([]);
   const [health, setHealth] = useState<Record<string, any>>({});
@@ -37,6 +49,8 @@ export function Providers() {
         config,
         maxConcurrency: Number(editing.maxConcurrency) || 1,
         enabled: editing.enabled,
+        capabilities: editing.capabilities ?? [],
+        realFileOutput: !!editing.realFileOutput,
       });
       setEditing(null);
       load();
@@ -46,12 +60,12 @@ export function Providers() {
   };
 
   return (
-    <div className="page">
+    <div className="page providers-page">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
         <h2>引擎管理</h2>
         <button
           onClick={() =>
-            setEditing({ id: "", kind: "cli", name: "", configText: '{\n  "command": "mytool -p {PROMPT_FILE}"\n}', maxConcurrency: 1, enabled: true, isNew: true })
+            setEditing({ id: "", kind: "cli", name: "", configText: '{\n  "command": "mytool -p {PROMPT_FILE}"\n}', maxConcurrency: 1, enabled: true, capabilities: [], realFileOutput: false, isNew: true })
           }
         >
           ＋ 添加引擎
@@ -60,12 +74,25 @@ export function Providers() {
       {error && <div className="error-text">{error}</div>}
 
       <div className="card">
-        <table>
+        <table className="providers-table">
+          <colgroup>
+            <col className="provider-col-id" />
+            <col className="provider-col-name" />
+            <col className="provider-col-kind" />
+            <col className="provider-col-capabilities" />
+            <col className="provider-col-file" />
+            <col className="provider-col-concurrency" />
+            <col className="provider-col-status" />
+            <col className="provider-col-health" />
+            <col className="provider-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>ID</th>
               <th>名称</th>
               <th>类型</th>
+              <th>能力标签</th>
+              <th>真实文件</th>
               <th>并发</th>
               <th>状态</th>
               <th>健康检查</th>
@@ -78,6 +105,12 @@ export function Providers() {
                 <td>{p.id}</td>
                 <td>{p.name}</td>
                 <td>{KIND_LABEL[p.kind] ?? p.kind}</td>
+                <td className="capability-cell">
+                  {(p.capabilities ?? []).map((capability: string) => (
+                    <span className="capability-tag" key={capability}>{CAPABILITY_LABEL[capability] ?? capability}</span>
+                  ))}
+                </td>
+                <td>{p.realFileOutput ? "✅ 是" : "—"}</td>
                 <td>{p.maxConcurrency}</td>
                 <td>{p.enabled ? "✅ 启用" : "⛔ 停用"}</td>
                 <td>
@@ -125,6 +158,32 @@ export function Providers() {
             配置 JSON（CLI: command/healthCommand，支持 {"{PROMPT} {PROMPT_FILE} {OUTPUT_FILE}"}；API: baseUrl/apiKey/model）
           </label>
           <textarea rows={6} value={editing.configText} onChange={(e) => setEditing({ ...editing, configText: e.target.value })} />
+          <label>能力标签</label>
+          <div className="capability-editor">
+            {Object.entries(CAPABILITY_LABEL).map(([capability, label]) => (
+              <label className="capability-option" key={capability}>
+                <input
+                  type="checkbox"
+                  checked={(editing.capabilities ?? []).includes(capability)}
+                  onChange={(e) => setEditing({
+                    ...editing,
+                    capabilities: e.target.checked
+                      ? [...(editing.capabilities ?? []), capability]
+                      : (editing.capabilities ?? []).filter((item: string) => item !== capability),
+                  })}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <label className="capability-option">
+            <input
+              type="checkbox"
+              checked={!!editing.realFileOutput}
+              onChange={(e) => setEditing({ ...editing, realFileOutput: e.target.checked })}
+            />
+            能向项目输出可继续使用的真实文件
+          </label>
           <label>最大并发</label>
           <input
             type="number"

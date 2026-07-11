@@ -36,13 +36,29 @@ export function createApiImageProvider(row: ProviderRow): Provider {
       let files: string[];
       if (mock) {
         files = await mockImages(outDir, Number(n) || 2, reqSize);
+      } else if (row.config.apiStyle === "dashscope") {
+        if (!baseUrl || !model || !apiKey) throw new Error(`引擎 ${row.id} 缺少 baseUrl/model/apiKey 配置`);
+        const submit = await fetchWithTimeout(`${trimSlash(baseUrl)}/services/aigc/image-generation/generation`, req.timeoutMs, {
+          method: "POST",
+          headers: { ...headers(apiKey), "X-DashScope-Async": "enable" },
+          body: JSON.stringify({
+            model,
+            input: { messages: [{ role: "user", content: [{ text: prompt }] }] },
+            parameters: { n, size: reqSize.replace("x", "*"), prompt_extend: true },
+          }),
+        });
+        const taskId = (await submit.json() as any)?.output?.task_id;
+        if (!taskId) throw new Error("阿里云百炼出图任务未返回 task_id");
+        const result = await pollDashScopeTask(baseUrl, apiKey, taskId, req.timeoutMs);
+        const urls = (result?.output?.choices ?? []).flatMap((choice: any) => choice?.message?.content ?? []).map((item: any) => item?.image).filter(Boolean);
+        files = await downloadImages(urls, outDir);
       } else {
         if (!baseUrl || !model) throw new Error(`引擎 ${row.id} 缺少 baseUrl/model 配置`);
         // xAI Grok 等不使用 OpenAI 的 size 字段，可通过各自字段请求原生比例。
         const body: Record<string, any> = { model, prompt, n, response_format: "b64_json" };
         if (!row.config.noSize) body.size = reqSize;
-        if (aspectRatio) body.aspect_ratio = aspectRatio;
-        if (resolution) body.resolution = resolution;
+        if (req.aspectRatio || aspectRatio) body.aspect_ratio = req.aspectRatio || aspectRatio;
+        if (req.resolution || resolution) body.resolution = req.resolution || resolution;
         const res = await fetchWithTimeout(`${trimSlash(baseUrl)}/images/generations`, req.timeoutMs, {
           method: "POST",
           headers: headers(apiKey),
@@ -82,6 +98,32 @@ export function createApiImageProvider(row: ProviderRow): Provider {
       return { ok: true, detail: "配置完整（实际连通性以首次出图为准）" };
     },
   };
+}
+
+async function pollDashScopeTask(baseUrl: string, apiKey: string, taskId: string, timeoutMs: number): Promise<any> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const response = await fetchWithTimeout(`${trimSlash(baseUrl)}/tasks/${taskId}`, 30_000, { headers: headers(apiKey) });
+    const data: any = await response.json();
+    const status = data?.output?.task_status;
+    if (status === "SUCCEEDED") return data;
+    if (status === "FAILED" || status === "CANCELED" || status === "UNKNOWN") throw new Error(`阿里云百炼出图失败：${data?.message ?? status}`);
+  }
+  throw new Error("阿里云百炼出图超时");
+}
+
+async function downloadImages(urls: string[], outDir: string): Promise<string[]> {
+  const files: string[] = [];
+  for (let index = 0; index < urls.length; index++) {
+    const response = await fetch(urls[index], { signal: AbortSignal.timeout(60_000) });
+    if (!response.ok) throw new Error(`图片下载失败：HTTP ${response.status}`);
+    const file = path.join(outDir, `image_${Date.now()}_${index + 1}.png`);
+    fs.writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+    files.push(file);
+  }
+  if (!files.length) throw new Error("阿里云百炼任务成功但没有返回图片地址");
+  return files;
 }
 
 /**

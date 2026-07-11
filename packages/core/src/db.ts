@@ -83,7 +83,9 @@ CREATE TABLE IF NOT EXISTS providers (
   name TEXT NOT NULL,
   config_json TEXT NOT NULL DEFAULT '{}',
   max_concurrency INTEGER NOT NULL DEFAULT 1,
-  enabled INTEGER NOT NULL DEFAULT 1
+  enabled INTEGER NOT NULL DEFAULT 1,
+  capabilities_json TEXT NOT NULL DEFAULT '[]',
+  real_file_output INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS prompt_overrides (
   path TEXT PRIMARY KEY,
@@ -169,6 +171,12 @@ export class Repo {
       return;
     }
     if (!hasTopics) this.db.exec(SCHEMA);
+    if (!columnExists(this.db, "providers", "capabilities_json")) {
+      this.db.exec("ALTER TABLE providers ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]';");
+    }
+    if (!columnExists(this.db, "providers", "real_file_output")) {
+      this.db.exec("ALTER TABLE providers ADD COLUMN real_file_output INTEGER NOT NULL DEFAULT 0;");
+    }
     // 老库补建索引（packages upsert 依赖）
     try {
       this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_topic_platform ON packages(topic_id, platform);");
@@ -456,12 +464,14 @@ export class Repo {
   upsertProvider(p: ProviderRow) {
     this.db
       .prepare(
-        `INSERT INTO providers (id, kind, name, config_json, max_concurrency, enabled)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO providers (id, kind, name, config_json, max_concurrency, enabled, capabilities_json, real_file_output)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, name=excluded.name,
-           config_json=excluded.config_json, max_concurrency=excluded.max_concurrency, enabled=excluded.enabled`
+           config_json=excluded.config_json, max_concurrency=excluded.max_concurrency, enabled=excluded.enabled,
+           capabilities_json=excluded.capabilities_json, real_file_output=excluded.real_file_output`
       )
-      .run(p.id, p.kind, p.name, JSON.stringify(p.config), p.maxConcurrency, p.enabled ? 1 : 0);
+      .run(p.id, p.kind, p.name, JSON.stringify(p.config), p.maxConcurrency, p.enabled ? 1 : 0,
+        JSON.stringify(p.capabilities ?? []), p.realFileOutput ? 1 : 0);
   }
 
   getProvider(id: string): ProviderRow | undefined {
@@ -584,5 +594,7 @@ function mapProvider(row: any): ProviderRow {
     config: safeJson<Record<string, any>>(row.config_json, {}),
     maxConcurrency: row.max_concurrency,
     enabled: !!row.enabled,
+    capabilities: safeJson(row.capabilities_json, []),
+    realFileOutput: !!row.real_file_output,
   };
 }

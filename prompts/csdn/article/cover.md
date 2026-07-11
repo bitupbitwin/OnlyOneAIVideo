@@ -1,4 +1,4 @@
-A 2K resolution (2048x1152, 16:9) cover image for a CSDN technical blog post. Theme: technology and programming, about「{{brief.topic}}」.
+A recommended 16:9 technical article cover (use the project-selected resolution; 2048x1152 may be used as a 2K preset) for a CSDN post about「{{brief.topic}}」.
 
 Style: modern tech aesthetic, dark or deep-blue background with circuit / code / terminal motifs, glowing accent colors (cyan, blue, purple), clean and professional, suitable as a developer blog banner.
 

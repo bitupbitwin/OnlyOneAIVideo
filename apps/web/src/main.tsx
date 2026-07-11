@@ -11,10 +11,10 @@ function App() {
   return (
     <HashRouter>
       <div className="topbar">
-        <span className="logo">一条视频产线</span>
+        <span className="logo">视频制作一条龙</span>
         <Link to="/">选题</Link>
         <Link to="/providers">引擎管理</Link>
-        <Link to="/prompts">模板管理</Link>
+        <Link to="/prompts">平台模板管理</Link>
       </div>
       <Routes>
         <Route path="/" element={<Topics />} />
