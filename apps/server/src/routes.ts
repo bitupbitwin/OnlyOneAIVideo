@@ -498,8 +498,15 @@ async function fetchPublicPage(url: URL): Promise<{ status: number; location: st
         Accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
         "User-Agent": "Mozilla/5.0 OnlyOneAIVideo/1.0",
       },
-      lookup: ((_hostname: string, _options: unknown, callback: (error: Error | null, address: string, family: number) => void) => {
-        callback(null, pinned.address, pinned.family);
+      // Node ≥20 默认开启 autoSelectFamily，连接走 lookupAndConnectMultiple，
+      // 会以 { all: true } 调用自定义 lookup 并期望返回地址数组；此时必须回调数组，
+      // 否则底层拿到 undefined 地址报 ERR_INVALID_IP_ADDRESS。两种调用形态都要兼容。
+      lookup: ((_hostname: string, options: any, callback: (error: Error | null, address: any, family?: number) => void) => {
+        if (options && options.all) {
+          callback(null, [{ address: pinned.address, family: pinned.family }]);
+        } else {
+          callback(null, pinned.address, pinned.family);
+        }
       }) as any,
       ...(url.protocol === "https:" ? { servername: url.hostname } : {}),
     }, (response) => {
