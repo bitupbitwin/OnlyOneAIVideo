@@ -39,7 +39,7 @@ pnpm --filter @amp/desktop dist       # 打包安装器（Windows NSIS / macOS d
 1. 默认内置 **演示引擎（Mock）**，无需任何配置即可完整跑通全部流程（生成的是演示内容/占位图）。
 2. 在「引擎管理」页配置真实引擎，或更简单——**复制 `.env.example` 为 `.env` 填入各家 key/CLI 命令**（详见 [docs/引擎配置指南.md](docs/引擎配置指南.md)）。填好后每个平台每步自动绑定推荐引擎；没填的自动回落到演示引擎，demo 始终可跑。
    - **CLI**：填 `AMP_CLI_CLAUDE=claude` 等（走订阅、包月不额外计费），驱动标题/内容/分镜
-   - **出图 API**：`ARK_API_KEY`（即梦/Seedream，中文封面最佳）；或填 `GROK_API_KEY` 启用「Grok底图+程序叠字」（零成本、中文 100% 正确）
+   - **出图 API**：`ARK_API_KEY`（即梦/Seedream，中文封面最佳）；或填 `GROK_API_KEY` 启用 Grok Imagine 分镜出图及「Grok 底图+程序叠字」（xAI API 按量计费，叠字中文 100% 正确）
    - **文本/视觉 API**：`DEEPSEEK_API_KEY`（评审）、`GROK_API_KEY`/`KIMI_API_KEY`（看图、文本）
 3. 新建选题时填写**主题**与**「我的具体要求」**（风格、必须包含/避免的内容，AI 严格遵循）；创建后在项目页**上传素材**：
    - 粘贴文字 / 技术笔记 / 文案草稿 → 写入提示词供 AI 基于其创作

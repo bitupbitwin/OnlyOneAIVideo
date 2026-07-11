@@ -31,14 +31,52 @@ export function createApiVideoProvider(row: ProviderRow): Provider {
         return { kind: "videos", files: [file] };
       }
       if (!c.baseUrl || !c.model) throw new Error(`引擎 ${row.id} 缺少 baseUrl/model 配置`);
-      if (!req.images?.[0]) throw new Error("图生视频需要输入图片（请置于「批量出图/封面」之后）");
+      const inputImage = req.images?.[0];
+      if (!inputImage && !c.allowTextToVideo) throw new Error("该视频引擎需要输入图片");
+
+      if (c.apiStyle === "xai") {
+        const body: any = {
+          model: c.model,
+          prompt: req.prompt,
+          duration: req.durationSec ?? c.duration ?? 5,
+          aspect_ratio: c.aspectRatio ?? req.imageSize ?? "9:16",
+          resolution: c.resolution ?? "480p",
+        };
+        if (inputImage) body.image = { url: toDataUrl(inputImage) };
+        onChunk?.("[Grok 视频] 提交生成任务…\n");
+        const submitted = await fetchWithTimeout(`${trimSlash(c.baseUrl)}/videos/generations`, 60_000, {
+          method: "POST",
+          headers: headers(c.apiKey),
+          body: JSON.stringify(body),
+        });
+        const requestId = (await submitted.json() as any)?.request_id;
+        if (!requestId) throw new Error("Grok 视频提交未返回 request_id");
+        const deadline = Date.now() + pollTimeout;
+        let videoUrl = "";
+        while (Date.now() < deadline) {
+          await sleep(pollInterval);
+          const response = await fetchWithTimeout(`${trimSlash(c.baseUrl)}/videos/${requestId}`, 60_000, {
+            headers: headers(c.apiKey),
+          });
+          const state: any = await response.json();
+          onChunk?.(`[Grok 视频] 状态：${state.status}\n`);
+          if (state.status === "done") { videoUrl = state?.video?.url ?? ""; break; }
+          if (state.status === "failed" || state.status === "expired") throw new Error(`Grok 视频生成${state.status}`);
+        }
+        if (!videoUrl) throw new Error("Grok 视频生成超时或未返回地址");
+        const file = path.join(outDir, `clip_${Date.now()}.mp4`);
+        const downloaded = await fetch(videoUrl, { signal: AbortSignal.timeout(180_000) });
+        if (!downloaded.ok) throw new Error(`视频下载失败：HTTP ${downloaded.status}`);
+        fs.writeFileSync(file, Buffer.from(await downloaded.arrayBuffer()));
+        return { kind: "videos", files: [file] };
+      }
 
       // 1) 提交任务
       const body: any = {
         model: c.model,
         content: [
           { type: "text", text: req.prompt },
-          { type: "image_url", image_url: { url: toDataUrl(req.images[0]) } },
+          { type: "image_url", image_url: { url: toDataUrl(inputImage!) } },
         ],
       };
       if (req.imageSize) body.ratio = req.imageSize;

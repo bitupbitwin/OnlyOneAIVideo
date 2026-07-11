@@ -75,14 +75,32 @@ export function seedProviders(repo: Repo, rootDir: string) {
         id,
         kind: "cli",
         name: `${name}（${sub}）`,
-        config: { command: `${winPipe} ${bin} -p`, healthCommand: `${bin} --version` },
+        config:
+          id === "cli-gemini"
+            ? {
+                // Antigravity CLI（agy v1.1.x）：无 run 子命令，-p 必须带参数；
+                // 用 --add-dir 挂载临时目录（绝对路径），@prompt.txt/@image-N 相对该目录解析
+                command: `"${bin}" --add-dir {TMP_DIR} -p "@prompt.txt {IMAGE_REFS}"`,
+                healthCommand: `"${bin}" --version`,
+                healthNote: "仅验证已安装，首次调用前需在终端运行 agy 完成 Google 登录",
+                useTempCwd: true,
+                imageReferences: true,
+              }
+            : id === "cli-codex"
+              ? {
+                  command: `${winPipe} ${bin} exec --ephemeral --skip-git-repo-check {IMAGE_ARGS} -o {OUTPUT_FILE} -`,
+                  healthCommand: `${bin} --version`,
+                  useTempCwd: true,
+                  imageArguments: true,
+                }
+            : { command: `${winPipe} ${bin} -p`, healthCommand: `${bin} --version` },
         maxConcurrency: 2,
         enabled,
       }),
       env[`AMP_CLI_${id.replace("cli-", "").toUpperCase()}`]
     );
   cli("cli-claude", "Claude Code CLI", env.AMP_CLI_CLAUDE || "claude", "Claude 订阅");
-  cli("cli-gemini", "Gemini CLI", env.AMP_CLI_GEMINI || "gemini", "Gemini 订阅");
+  cli("cli-gemini", "Antigravity CLI", env.AMP_CLI_GEMINI || "agy", "Google·agy");
   cli("cli-codex", "Codex CLI", env.AMP_CLI_CODEX || "codex", "ChatGPT 订阅");
 
   ensure(
@@ -103,8 +121,84 @@ export function seedProviders(repo: Repo, rootDir: string) {
       id: "api-grok-vision",
       kind: "api-text",
       name: "Grok API · 视觉（素材理解）",
-      config: { baseUrl: "https://api.x.ai/v1", model: "grok-2-vision-1212", apiKey: env.GROK_API_KEY || "", vision: true },
+      config: { baseUrl: "https://api.x.ai/v1", model: "grok-4.3", apiKey: env.GROK_API_KEY || "", vision: true },
       maxConcurrency: 2,
+      enabled,
+    }),
+    env.GROK_API_KEY
+  );
+  ensure(
+    "api-grok-text",
+    (enabled) => ({
+      id: "api-grok-text",
+      kind: "api-text",
+      name: "Grok API · 文本创作",
+      config: { baseUrl: "https://api.x.ai/v1", model: "grok-4.3", apiKey: env.GROK_API_KEY || "" },
+      maxConcurrency: 2,
+      enabled,
+    }),
+    env.GROK_API_KEY
+  );
+  ensure(
+    "api-grok-image",
+    (enabled) => ({
+      id: "api-grok-image",
+      kind: "api-image",
+      name: "Grok Imagine · 分镜出图",
+      config: {
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-imagine-image",
+        apiKey: env.GROK_API_KEY || "",
+        noSize: true,
+        aspectRatio: "9:16",
+        resolution: "1k",
+        n: 1,
+      },
+      maxConcurrency: 2,
+      enabled,
+    }),
+    env.GROK_API_KEY
+  );
+  ensure(
+    "api-grok-overlay",
+    (enabled) => ({
+      id: "api-grok-overlay",
+      kind: "api-image",
+      name: "Grok Imagine · 底图 + 程序叠字",
+      config: {
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-imagine-image",
+        apiKey: env.GROK_API_KEY || "",
+        noSize: true,
+        aspectRatio: "9:16",
+        resolution: "1k",
+        overlayText: true,
+        n: 1,
+      },
+      maxConcurrency: 2,
+      enabled,
+    }),
+    env.GROK_API_KEY
+  );
+  ensure(
+    "api-grok-video",
+    (enabled) => ({
+      id: "api-grok-video",
+      kind: "api-video",
+      name: "Grok Imagine · 文生/图生视频（480p·5秒）",
+      config: {
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-imagine-video",
+        apiKey: env.GROK_API_KEY || "",
+        apiStyle: "xai",
+        allowTextToVideo: true,
+        aspectRatio: "9:16",
+        resolution: "480p",
+        duration: 5,
+        pollIntervalMs: 5000,
+        pollTimeoutMs: 10 * 60 * 1000,
+      },
+      maxConcurrency: 1,
       enabled,
     }),
     env.GROK_API_KEY

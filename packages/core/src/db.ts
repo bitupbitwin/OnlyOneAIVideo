@@ -211,6 +211,21 @@ export class Repo {
     this.db.prepare("UPDATE topics SET auto = ? WHERE id = ?").run(auto ? 1 : 0, id);
   }
 
+  deleteTopic(id: number) {
+    this.db.exec("BEGIN");
+    try {
+      this.db.prepare("DELETE FROM artifacts WHERE step_id IN (SELECT id FROM steps WHERE topic_id = ?)").run(id);
+      this.db.prepare("DELETE FROM steps WHERE topic_id = ?").run(id);
+      this.db.prepare("DELETE FROM materials WHERE topic_id = ?").run(id);
+      this.db.prepare("DELETE FROM packages WHERE topic_id = ?").run(id);
+      this.db.prepare("DELETE FROM topics WHERE id = ?").run(id);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   recoverInterrupted() {
     this.db
       .prepare("UPDATE steps SET status = 'failed', error = '服务重启导致任务中断，请点击重跑' WHERE status = 'running'")
@@ -283,7 +298,10 @@ export class Repo {
   }
 
   listStepsByTopic(topicId: number): StepRow[] {
-    return (this.db.prepare("SELECT * FROM steps WHERE topic_id = ? ORDER BY id").all(topicId) as any[]).map(mapStep);
+    return (this.db.prepare(`SELECT * FROM steps WHERE topic_id = ? ORDER BY CASE step_id
+      WHEN 'analyze' THEN 1 WHEN 'title' THEN 2 WHEN 'script' THEN 3 WHEN 'storyboard' THEN 4
+      WHEN 'frames' THEN 5 WHEN 'video' THEN 6 WHEN 'tts' THEN 7 WHEN 'compose' THEN 8
+      WHEN 'review' THEN 9 WHEN 'adapt' THEN 10 ELSE 99 END`).all(topicId) as any[]).map(mapStep);
   }
 
   setStepStatus(id: number, status: StepStatus, patch: { error?: string | null; started?: boolean; finished?: boolean } = {}) {

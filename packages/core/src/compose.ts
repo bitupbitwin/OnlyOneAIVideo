@@ -57,14 +57,16 @@ export async function probeDurationSec(file: string): Promise<number | undefined
 
 export interface ComposeSceneInput {
   index: number;
-  source: "generated" | "footage";
+  source: "generated" | "footage" | "video";
   /** generated：静帧图片 */
   framePath?: string;
   /** footage：素材视频 + 截取区间 */
   footagePath?: string;
+  /** video：AI 生成的带声音短视频 */
+  videoPath?: string;
   clipStart?: number;
   clipEnd?: number;
-  audioPath: string;
+  audioPath?: string;
   subtitle: string;
   /** TTS 音频实测时长 */
   ttsDurSec: number;
@@ -147,7 +149,17 @@ async function renderSegment(
   const audioChain = `[1:a]aresample=44100,apad=whole_dur=${durArg}[a]`;
 
   let args: string[];
-  if (scene.source === "footage") {
+  if (scene.source === "video") {
+    if (!scene.videoPath) throw new Error(`镜头 ${scene.index} 缺少生成视频文件`);
+    const filter =
+      `[0:v]fps=${FPS},scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+      `crop=${WIDTH}:${HEIGHT},format=yuv420p[v]`;
+    args = [
+      "-i", scene.videoPath,
+      "-filter_complex", filter,
+      "-map", "[v]", "-map", "0:a?",
+    ];
+  } else if (scene.source === "footage") {
     if (!scene.footagePath) throw new Error(`镜头 ${scene.index} 缺少实拍素材路径`);
     const clipStart = Math.max(0, scene.clipStart ?? 0);
     const clipEnd = scene.clipEnd && scene.clipEnd > clipStart ? scene.clipEnd : clipStart + dur;
@@ -164,7 +176,7 @@ async function renderSegment(
       audioChain;
     args = [
       "-ss", clipStart.toFixed(3), "-t", Math.max(avail, 0.2).toFixed(3), "-i", scene.footagePath,
-      "-i", scene.audioPath,
+      "-i", scene.audioPath!,
       "-filter_complex", filter,
       "-map", "[v]", "-map", "[a]",
     ];
@@ -179,7 +191,7 @@ async function renderSegment(
       audioChain;
     args = [
       "-i", scene.framePath,
-      "-i", scene.audioPath,
+      "-i", scene.audioPath!,
       "-filter_complex", filter,
       "-map", "[v]", "-map", "[a]",
     ];

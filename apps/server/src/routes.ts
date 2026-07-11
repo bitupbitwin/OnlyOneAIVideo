@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import type { FastifyInstance } from "fastify";
-import type { PipelineEngine, ProviderRegistry, Repo, TemplateStore } from "@amp/core";
+import { MAINLINE_STEP_DEFS, type PipelineEngine, type ProviderRegistry, type Repo, type TemplateStore } from "@amp/core";
 import type { Brief, EngineEvent, ProviderRow, SourceType } from "@amp/shared";
+import { ensureAnalysisImage, ensureImageThumbnail } from "@amp/providers";
 
 interface Ctx {
   repo: Repo;
@@ -63,6 +64,41 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     return detail;
   });
 
+  app.delete<{ Params: { id: string } }>("/api/topics/:id", async (req, reply) => {
+    const topicId = Number(req.params.id);
+    const topic = repo.getTopic(topicId);
+    if (!topic) return reply.code(404).send({ error: "选题不存在" });
+    if (repo.listStepsByTopic(topicId).some((step) => step.status === "running")) {
+      return reply.code(409).send({ error: "选题正在运行，完成后才能删除" });
+    }
+    repo.deleteTopic(topicId);
+    const workspaceRoot = path.resolve(ctx.workspaceDir);
+    const topicDir = path.resolve(workspaceRoot, `topic-${topicId}`);
+    if (topicDir.startsWith(`${workspaceRoot}${path.sep}`) && fs.existsSync(topicDir)) {
+      fs.rmSync(topicDir, { recursive: true, force: true });
+    }
+    return { ok: true };
+  });
+
+  app.post<{ Body: { ids: number[] } }>("/api/topics/bulk-delete", async (req, reply) => {
+    const ids = [...new Set((req.body?.ids ?? []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+    if (ids.length === 0) return reply.code(400).send({ error: "请至少选择一个选题" });
+    const topics = ids.map((id) => repo.getTopic(id));
+    if (topics.some((topic) => !topic)) return reply.code(404).send({ error: "部分选题不存在，请刷新后重试" });
+    const running = ids.filter((id) => repo.listStepsByTopic(id).some((step) => step.status === "running"));
+    if (running.length > 0) return reply.code(409).send({ error: "所选项目中有正在运行的选题，请完成后再删除" });
+
+    const workspaceRoot = path.resolve(ctx.workspaceDir);
+    for (const id of ids) {
+      repo.deleteTopic(id);
+      const topicDir = path.resolve(workspaceRoot, `topic-${id}`);
+      if (topicDir.startsWith(`${workspaceRoot}${path.sep}`) && fs.existsSync(topicDir)) {
+        fs.rmSync(topicDir, { recursive: true, force: true });
+      }
+    }
+    return { ok: true, deleted: ids.length };
+  });
+
   app.put<{ Params: { id: string }; Body: { brief: Brief } }>("/api/topics/:id/brief", async (req, reply) => {
     const topic = repo.getTopic(Number(req.params.id));
     if (!topic) return reply.code(404).send({ error: "选题不存在" });
@@ -74,8 +110,15 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
   app.post<{ Params: { id: string }; Body: { auto?: boolean } }>("/api/topics/:id/run", async (req, reply) => {
     const topic = repo.getTopic(Number(req.params.id));
     if (!topic) return reply.code(404).send({ error: "选题不存在" });
+    const materials = repo.listMaterials(topic.id);
+    if (topic.source_type === "image" && !materials.some((material) => material.kind === "image")) {
+      return reply.code(400).send({ error: "请先上传至少一张参考图，再运行素材理解" });
+    }
+    if (topic.source_type === "footage" && !materials.some((material) => material.kind === "video")) {
+      return reply.code(400).send({ error: "请先上传实拍视频，再运行素材理解" });
+    }
     if (req.body?.auto != null) repo.setTopicAuto(topic.id, !!req.body.auto);
-    engine.kick(topic.id);
+    engine.kick(topic.id, true);
     return { ok: true };
   });
 
@@ -110,6 +153,14 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
       await streamPipeline((part as any).file, fs.createWriteStream(dest));
       const mime: string = part.mimetype || "";
       const kind = mime.startsWith("image/") ? "image" : mime.startsWith("video/") ? "video" : "file";
+      if (kind === "image") {
+        try {
+          await ensureAnalysisImage(dest, `${dest}.analysis.jpg`);
+        } catch (error: any) {
+          fs.rmSync(dest, { force: true });
+          return reply.code(422).send({ error: `图片无法处理，请换用 JPG/PNG/WebP：${error?.message ?? String(error)}` });
+        }
+      }
       created.push(repo.createMaterial({ topicId: topic.id, kind, originalName: safeName, filePath: dest, note }));
     }
     if (created.length === 0) return reply.code(400).send({ error: "未收到文件" });
@@ -119,8 +170,48 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
   app.delete<{ Params: { id: string } }>("/api/materials/:id", async (req) => {
     const m = repo.getMaterial(Number(req.params.id));
     if (m?.file_path && fs.existsSync(m.file_path)) fs.rmSync(m.file_path, { force: true });
+    if (m?.file_path && fs.existsSync(`${m.file_path}.thumb.jpg`)) fs.rmSync(`${m.file_path}.thumb.jpg`, { force: true });
+    if (m?.file_path && fs.existsSync(`${m.file_path}.analysis.jpg`)) fs.rmSync(`${m.file_path}.analysis.jpg`, { force: true });
     repo.deleteMaterial(Number(req.params.id));
     return { ok: true };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/materials/:id/file", async (req, reply) => {
+    const material = repo.getMaterial(Number(req.params.id));
+    if (!material?.file_path || !fs.existsSync(material.file_path)) return reply.code(404).send({ error: "素材文件不存在" });
+    const resolved = path.resolve(material.file_path);
+    const root = path.resolve(ctx.workspaceDir);
+    const rel = path.relative(root, resolved);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return reply.code(403).send({ error: "禁止访问工作目录之外的文件" });
+    const ext = path.extname(resolved).toLowerCase();
+    const mime =
+      ext === ".png" ? "image/png"
+      : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg"
+      : ext === ".webp" ? "image/webp"
+      : ext === ".mp4" ? "video/mp4"
+      : "application/octet-stream";
+    reply.header("Content-Type", mime);
+    return reply.send(fs.createReadStream(resolved));
+  });
+
+  app.get<{ Params: { id: string } }>("/api/materials/:id/thumbnail", async (req, reply) => {
+    const material = repo.getMaterial(Number(req.params.id));
+    if (!material?.file_path || material.kind !== "image" || !fs.existsSync(material.file_path)) {
+      return reply.code(404).send({ error: "图片素材不存在" });
+    }
+    const resolved = path.resolve(material.file_path);
+    const root = path.resolve(ctx.workspaceDir);
+    const rel = path.relative(root, resolved);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return reply.code(403).send({ error: "禁止访问工作目录之外的文件" });
+    const thumbnail = `${resolved}.thumb.jpg`;
+    try {
+      await ensureImageThumbnail(resolved, thumbnail);
+    } catch (error: any) {
+      return reply.code(422).send({ error: `无法生成图片缩略图：${error?.message ?? String(error)}` });
+    }
+    reply.header("Content-Type", "image/jpeg");
+    reply.header("Cache-Control", "private, max-age=3600");
+    return reply.send(fs.createReadStream(thumbnail));
   });
 
   app.post<{ Params: { id: string }; Body: { feedback?: string } }>("/api/steps/:id/rerun", async (req, reply) => {
@@ -132,10 +223,24 @@ export async function registerRoutes(app: FastifyInstance, ctx: Ctx) {
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/steps/:id/run", async (req, reply) => {
+    try {
+      engine.runPendingStep(Number(req.params.id));
+      return { ok: true };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err?.message ?? String(err) });
+    }
+  });
+
   app.post<{ Params: { id: string }; Body: { providerId: string } }>("/api/steps/:id/provider", async (req, reply) => {
     const step = repo.getStep(Number(req.params.id));
     if (!step) return reply.code(404).send({ error: "步骤不存在" });
-    if (!repo.getProvider(req.body.providerId)) return reply.code(400).send({ error: "引擎不存在" });
+    const provider = repo.getProvider(req.body.providerId);
+    if (!provider) return reply.code(400).send({ error: "引擎不存在" });
+    const allowedKinds = MAINLINE_STEP_DEFS[step.step_id].providerKinds;
+    if (!allowedKinds.includes(provider.kind)) {
+      return reply.code(400).send({ error: `该模块不支持“${provider.name}”；请选择 ${allowedKinds.join(" / ")} 类型引擎` });
+    }
     repo.setStepProvider(step.id, req.body.providerId);
     return repo.getStep(step.id);
   });

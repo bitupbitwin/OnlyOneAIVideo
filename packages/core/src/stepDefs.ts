@@ -17,6 +17,7 @@ export const MAINLINE: StepId[] = [
   "script",
   "storyboard",
   "frames",
+  "video",
   "tts",
   "compose",
   "review",
@@ -27,10 +28,10 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
   analyze: {
     id: "analyze",
     name: "素材理解",
-    prompt: null,
+    prompt: "analyze.md",
     humanGate: true,
     requiresProvider: true,
-    providerKinds: ["api-text"],
+    providerKinds: ["api-text", "cli"],
     defaultProviderId: "api-grok-vision",
     requiredForTopicSuccess: true,
   },
@@ -72,6 +73,16 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
     requiresProvider: true,
     providerKinds: ["api-image"],
     defaultProviderId: "img-mock",
+    requiredForTopicSuccess: true,
+  },
+  video: {
+    id: "video",
+    name: "逐镜视频生成",
+    prompt: null,
+    humanGate: false,
+    requiresProvider: true,
+    providerKinds: ["api-video"],
+    defaultProviderId: "video-mock",
     requiredForTopicSuccess: true,
   },
   tts: {
@@ -116,6 +127,14 @@ export const MAINLINE_STEP_DEFS: Record<StepId, StepDefMeta> = {
   },
 };
 
-export function initialStepStatus(stepId: StepId, sourceType: SourceType): StepStatus {
-  return stepId === "analyze" && sourceType === "text" ? "skipped" : "pending";
+export function initialStepStatus(
+  stepId: StepId,
+  sourceType: SourceType,
+  mediaMode: "image-tts" | "image-video" | "text-video" = "image-tts"
+): StepStatus {
+  if (stepId === "analyze" && sourceType === "text") return "skipped";
+  if (stepId === "frames" && mediaMode === "text-video") return "skipped";
+  if (stepId === "video" && mediaMode === "image-tts") return "skipped";
+  if (stepId === "tts" && mediaMode !== "image-tts") return "skipped";
+  return "pending";
 }

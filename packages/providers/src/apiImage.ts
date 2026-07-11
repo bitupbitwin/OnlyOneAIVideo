@@ -13,7 +13,7 @@ import { fetchWithTimeout, headers, trimSlash } from "./apiText.js";
  *   再用 sharp 把标题文字精确叠加到底图上（中文 100% 正确，适合 Grok 等中文渲染弱的模型）。
  */
 export function createApiImageProvider(row: ProviderRow): Provider {
-  const { baseUrl, apiKey, model, size = "1024x1024", mock, overlayText } = row.config;
+  const { baseUrl, apiKey, model, size = "1024x1024", mock, overlayText, aspectRatio, resolution } = row.config;
   const defaultN = row.config.n ?? 3;
 
   return {
@@ -38,10 +38,15 @@ export function createApiImageProvider(row: ProviderRow): Provider {
         files = await mockImages(outDir, Number(n) || 2, reqSize);
       } else {
         if (!baseUrl || !model) throw new Error(`引擎 ${row.id} 缺少 baseUrl/model 配置`);
+        // xAI Grok 等不使用 OpenAI 的 size 字段，可通过各自字段请求原生比例。
+        const body: Record<string, any> = { model, prompt, n, response_format: "b64_json" };
+        if (!row.config.noSize) body.size = reqSize;
+        if (aspectRatio) body.aspect_ratio = aspectRatio;
+        if (resolution) body.resolution = resolution;
         const res = await fetchWithTimeout(`${trimSlash(baseUrl)}/images/generations`, req.timeoutMs, {
           method: "POST",
           headers: headers(apiKey),
-          body: JSON.stringify({ model, prompt, size: reqSize, n, response_format: "b64_json" }),
+          body: JSON.stringify(body),
         });
         const data: any = await res.json();
         const items: any[] = data?.data ?? [];

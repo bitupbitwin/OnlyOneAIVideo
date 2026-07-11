@@ -5,6 +5,7 @@ import { createApiTextProvider } from "./apiText.js";
 import { createApiImageProvider } from "./apiImage.js";
 import { createApiVideoProvider } from "./apiVideo.js";
 import { createTtsProvider } from "./tts.js";
+export { ensureAnalysisImage, ensureImageThumbnail } from "./thumbnail.js";
 
 export const providerFactories: Record<ProviderKind, ProviderFactory> = {
   cli: createCliProvider,

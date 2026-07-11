@@ -39,11 +39,12 @@ export class PipelineEngine extends EventEmitter {
     const topic = this.repo.getTopic(topicId);
     if (!topic) throw new Error(`选题 ${topicId} 不存在`);
     const existing = this.repo.listStepsByTopic(topicId);
-    if (existing.length > 0) return;
+    const existingIds = new Set(existing.map((step) => step.step_id));
 
     for (const stepId of MAINLINE) {
+      if (existingIds.has(stepId)) continue;
       const def = MAINLINE_STEP_DEFS[stepId];
-      const status = initialStepStatus(stepId, topic.source_type);
+      const status = initialStepStatus(stepId, topic.source_type, topic.brief.mediaMode);
       const humanGate = topic.auto ? false : def.humanGate;
       const provider = def.requiresProvider ? this.resolveProvider(def)?.id ?? def.defaultProviderId : null;
       this.repo.createStep({
@@ -59,13 +60,14 @@ export class PipelineEngine extends EventEmitter {
     this.refreshTopicStatus(topicId);
   }
 
-  kick(topicId: number) {
+  kick(topicId: number, forceOneStep = false) {
     if (this.topicInflight.has(topicId)) return;
     this.bootstrapSteps(topicId);
     this.refreshTopicStatus(topicId);
 
     const topic = this.repo.getTopic(topicId);
     if (!topic) return;
+    if (!topic.auto && !forceOneStep) return;
     const steps = this.repo.listStepsByTopic(topicId);
     const byStepId = new Map(steps.map((s) => [s.step_id, s]));
 
@@ -95,11 +97,27 @@ export class PipelineEngine extends EventEmitter {
     const step = this.repo.getStep(stepId);
     if (!step) throw new Error(`步骤 ${stepId} 不存在`);
     if (this.inflight.has(stepId)) throw new Error("该步骤正在运行中");
+    this.repo.setTopicAuto(step.topic_id, false);
     if (feedback?.trim()) this.feedback.set(stepId, feedback.trim());
     this.repo.resetStepsFrom(step.topic_id, step.step_id, MAINLINE);
     this.emitEvent({ type: "step-status", topicId: step.topic_id, stepId: step.id, data: { status: "pending" } });
     this.refreshTopicStatus(step.topic_id);
-    this.kick(step.topic_id);
+    this.kick(step.topic_id, true);
+  }
+
+  runPendingStep(stepId: number) {
+    const step = this.repo.getStep(stepId);
+    if (!step) throw new Error(`步骤 ${stepId} 不存在`);
+    if (step.status !== "pending") throw new Error("只有待执行模块可以运行");
+    const steps = this.repo.listStepsByTopic(step.topic_id);
+    const index = MAINLINE.indexOf(step.step_id);
+    const blocked = steps.some((candidate) => {
+      const candidateIndex = MAINLINE.indexOf(candidate.step_id);
+      return candidateIndex < index && candidate.status !== "succeeded" && candidate.status !== "skipped";
+    });
+    if (blocked) throw new Error("请先完成上一个模块");
+    this.repo.setTopicAuto(step.topic_id, false);
+    this.kick(step.topic_id, true);
   }
 
   confirmHumanGate(stepId: number) {
@@ -244,6 +262,8 @@ export class PipelineEngine extends EventEmitter {
 
       if (step.step_id === "frames") {
         await this.runFrames(step);
+      } else if (step.step_id === "video") {
+        await this.runVideo(step);
       } else if (step.step_id === "tts") {
         await this.runTts(step);
       } else if (step.step_id === "compose") {
@@ -282,7 +302,23 @@ export class PipelineEngine extends EventEmitter {
     let result: GenerateResult;
     try {
       result = await provider.generate(
-        { taskId: String(step.id), stepType: step.step_id, prompt, timeoutMs: STEP_TIMEOUT_MS, outDir },
+        {
+          taskId: String(step.id),
+          stepType: step.step_id,
+          prompt,
+          timeoutMs: STEP_TIMEOUT_MS,
+          outDir,
+          images:
+            step.step_id === "analyze"
+              ? this.repo
+                  .listMaterials(step.topic_id)
+                  .filter((material) => material.kind === "image" && material.file_path)
+                  .map((material) => {
+                    const analysisCopy = `${material.file_path}.analysis.jpg`;
+                    return fs.existsSync(analysisCopy) ? analysisCopy : material.file_path!;
+                  })
+              : undefined,
+        },
         (chunk) => this.emitEvent({ type: "step-stream", topicId: step.topic_id, stepId: step.id, data: { chunk } })
       );
     } finally {
@@ -298,7 +334,7 @@ export class PipelineEngine extends EventEmitter {
       const titles = (Array.isArray(parsed) ? parsed : text.split("\n"))
         .map((x) => String(x).replace(/^\s*[\d.、\-*]+\s*/, "").trim())
         .filter(Boolean)
-        .slice(0, 5);
+        .slice(0, 3);
       if (titles.length === 0) throw new Error("未解析到标题候选");
       const created = titles.map((title) =>
         this.repo.createArtifact({ stepId: step.id, version, kind: "text", role: "title", content: title, label: "标题候选" })
@@ -388,6 +424,19 @@ export class PipelineEngine extends EventEmitter {
         release();
       }
     }
+    const firstFrame = graph.scenes.find((scene) => scene.framePath)?.framePath;
+    if (firstFrame) {
+      const cover = this.repo.createArtifact({
+        stepId: step.id,
+        version,
+        kind: "image",
+        role: "cover",
+        filePath: firstFrame,
+        label: "封面（复用首镜，不额外消耗出图额度）",
+        meta: { source: "first-frame" },
+      });
+      this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: cover });
+    }
     this.writeRuntime(step.topic_id, graph);
   }
 
@@ -428,6 +477,57 @@ export class PipelineEngine extends EventEmitter {
     this.writeRuntime(step.topic_id, graph);
   }
 
+  private async runVideo(step: StepRow) {
+    const graph = this.readRuntime(step.topic_id);
+    if (graph.scenes.length === 0) throw new Error("缺少 runtime/scenes.json，请先生成分镜表");
+    if (!step.provider_id) throw new Error("video 步骤未绑定视频生成引擎");
+    const topic = this.repo.getTopic(step.topic_id)!;
+    const mode = topic.brief.mediaMode ?? "image-tts";
+    const provider = this.registry.get(step.provider_id);
+    const version = this.repo.nextArtifactVersion(step.id);
+    const outDir = this.stepDir(step, version);
+
+    for (const scene of graph.scenes) {
+      const inputImage = mode === "image-video" ? scene.framePath : undefined;
+      if (mode === "image-video" && (!inputImage || !fs.existsSync(inputImage))) {
+        throw new Error(`镜头 ${scene.index} 缺少基底图片，请先运行「逐镜画面+封面」`);
+      }
+      const prompt = [
+        scene.visual || scene.narration,
+        `Narration/dialogue to include naturally in the generated clip: ${scene.narration}`,
+        "Vertical short-video shot, coherent motion, preserve character identity and appearance.",
+      ].join("\n");
+      const release = await this.registry.semaphore(provider.row).acquire();
+      try {
+        const result = await provider.generate({
+          taskId: `${step.id}-${scene.index}`,
+          stepType: "video",
+          prompt,
+          timeoutMs: STEP_TIMEOUT_MS,
+          outDir,
+          images: inputImage ? [inputImage] : undefined,
+          imageSize: "9:16",
+          durationSec: 5,
+        });
+        if (result.kind !== "videos" || !result.files[0]) throw new Error(`镜头 ${scene.index} 未生成视频`);
+        scene.videoPath = result.files[0];
+        const artifact = this.repo.createArtifact({
+          stepId: step.id,
+          version,
+          kind: "video",
+          role: "generated-clip",
+          filePath: result.files[0],
+          label: `视频镜头 ${scene.index}`,
+          meta: { sceneIndex: scene.index, mode },
+        });
+        this.emitEvent({ type: "artifact", topicId: step.topic_id, stepId: step.id, data: artifact });
+      } finally {
+        release();
+      }
+    }
+    this.writeRuntime(step.topic_id, graph);
+  }
+
   private async runCompose(step: StepRow) {
     const graph = this.readRuntime(step.topic_id);
     if (graph.scenes.length === 0) throw new Error("缺少 runtime/scenes.json，请先生成分镜表");
@@ -437,9 +537,27 @@ export class PipelineEngine extends EventEmitter {
     // 实拍镜头的素材源：选题的第一个视频素材
     const footage = this.repo.listMaterials(step.topic_id).find((m) => m.kind === "video")?.file_path ?? undefined;
 
-    // 主时钟：TTS 音频 ffprobe 实测时长 + 呼吸间隔（不信任引擎自报时长）
+    const mediaMode = this.repo.getTopic(step.topic_id)?.brief.mediaMode ?? "image-tts";
+    // 主时钟：普通路径取 TTS 时长；视频路径取生成视频的实测时长。
     const inputs: ComposeSceneInput[] = [];
     for (const scene of graph.scenes) {
+      if (mediaMode !== "image-tts") {
+        if (!scene.videoPath || !fs.existsSync(scene.videoPath)) {
+          throw new Error(`镜头 ${scene.index} 缺少生成视频，请先运行「逐镜视频生成」`);
+        }
+        const videoDur = await probeDurationSec(scene.videoPath);
+        if (!videoDur) throw new Error(`镜头 ${scene.index} 视频时长无法探测`);
+        scene.durationSec = Math.round(videoDur * 100) / 100;
+        inputs.push({
+          index: scene.index,
+          source: "video",
+          videoPath: scene.videoPath,
+          subtitle: scene.subtitle || scene.narration,
+          ttsDurSec: scene.durationSec,
+          durationSec: scene.durationSec,
+        });
+        continue;
+      }
       if (!scene.audioPath || !fs.existsSync(scene.audioPath)) {
         throw new Error(`镜头 ${scene.index} 缺少配音文件，请先运行「逐镜配音」`);
       }

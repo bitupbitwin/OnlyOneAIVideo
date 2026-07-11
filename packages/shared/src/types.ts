@@ -4,6 +4,7 @@ export type StepId =
   | "script"
   | "storyboard"
   | "frames"
+  | "video"
   | "tts"
   | "compose"
   | "review"
@@ -31,6 +32,7 @@ export interface Brief {
   references?: string;
   requirements?: string;
   extra?: string;
+  mediaMode?: "image-tts" | "image-video" | "text-video";
 }
 
 export type MaterialKind = "text" | "image" | "video" | "file";
@@ -115,6 +117,7 @@ export interface RuntimeScene {
   visual?: string;
   clip?: { start: number; end: number };
   framePath?: string;
+  videoPath?: string;
   audioPath?: string;
   /** TTS 音频实测时长（compose 前 ffprobe 回填） */
   ttsDurSec?: number;

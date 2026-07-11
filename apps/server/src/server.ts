@@ -6,7 +6,7 @@ import websocket from "@fastify/websocket";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { PipelineEngine, ProviderRegistry, Repo, TemplateStore } from "@amp/core";
-import { providerFactories } from "@amp/providers";
+import { ensureAnalysisImage, providerFactories } from "@amp/providers";
 import { findRepoRoot } from "./root.js";
 import { seedProviders } from "./seed.js";
 import { registerRoutes } from "./routes.js";
@@ -45,6 +45,15 @@ export async function startServer(opts: ServerOptions = {}) {
   const templates = new TemplateStore(root, repo);
   const registry = new ProviderRegistry(repo, providerFactories);
   const engine = new PipelineEngine(repo, registry, templates, workspaceDir);
+  // 为升级前创建的选题补齐新加入的主线模块（例如逐镜视频生成）。
+  for (const topic of repo.listTopics()) {
+    engine.bootstrapSteps(topic.id);
+    for (const material of repo.listMaterials(topic.id)) {
+      if (material.kind === "image" && material.file_path && fs.existsSync(material.file_path)) {
+        await ensureAnalysisImage(material.file_path, `${material.file_path}.analysis.jpg`).catch(() => undefined);
+      }
+    }
+  }
 
   const app = Fastify({ logger: { level: "info" } });
   await app.register(cors, { origin: true });
